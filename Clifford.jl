@@ -329,32 +329,30 @@ end
 
 
 #============= Optimization =============#
-# For the optimization algorithm, I was wondering if a particle-swarm stochastic
-# algorithm would outperform those employed by other active groups.  The advantage
-# is that stochastic algorithms have a better expected performance on spaces with
-# many parameters (I've seen PSO employed successfully on a 16-dimensional space
-# with very narrow peaks in the fitness function).  With freedom to define many more
-# parameters than previous groups, we could even try to find a meshing of the
-# spectrum of the pulse and tune every point in that mesh independently.
+# For the optimization algorithm, I was wondering if particle-swarm stochastic
+# algorithms would outperform those employed by other active groups.  The main
+# advantage is that stochastic algorithms have a better expected performance on
+# spaces with many parameters (I've seen PSO employed successfully on a 16-
+# dimensional space with very narrow peaks in the fitness function).  With
+# freedom to define many more parameters than previous groups, we could even
+# try to find a meshing of the spectrum of the pulse and tune every point in
+# the mesh independently.
 
 # Explicitly, if we have N 14-bit digital points, converted to an analog signal
-# with an appropriate low-pass filter, we could choose to optimize all N points.
-# Or we could find the fourier components of the pulse and optimize them.  This
-# has to be done subject to the constraints that the voltage is zero at T = 0 and
-# T = pulselength, which I will assume is 20ns.
+# with an appropriate low-pass filter, we could optimize all N points, or we
+# could find the fourier components of the pulse and optimize them.  This has
+# to be done subject to the constraints that the voltage is zero at T = 0 and
+# T = pulselength, which I will assume is 20ns.  I will write waveformPSO to
+# optimize the waveform point by point, subject to user-specified bounds.
 
-# Looking on GitHub, the only PSO library built in Julia has precisely zero
-# comments, and the "Usage" section of the Readme is left blank.  So I don't know
-# if we can rely on it.  There is a MATLAB library implementing it but I might just
-# prefer to roll our own, tailored to waveform shaping.
-
-# A PSO solution is a list of the values for all the parameters of interest.  For us,
-# it could just be every point in the waveform.  Its fitness is determined by sending
-# that pulse to the AWG as the definition of a gate, and benchmarking that gate using
-# orbitFitness defined above.  For good SNR we need high averaging, so a single
-# fitness measurement could take a couple milliseconds.  Keep this in mind when
-# comparing the performance to the pure-math fitness function below, which likely
-# takes the computer less than a microsecond.
+# A PSO solution is a list of the values for all the parameters of interest.
+# For us, this it is just be every point in the waveform.  Its fitness is
+# determined by sending that pulse to the AWG as the definition of a gate, and
+# benchmarking that gate using orbitFitness defined above.  For good SNR we
+# need high averaging, so a single fitness measurement could take a couple
+# milliseconds.  Keep this in mind when comparing the performance to that of
+# the pure-math fitness function below, which likely takes the computer less
+# than a microsecond.
 
 #=
 function fitness(waveform::Array{Any,1})
@@ -364,21 +362,13 @@ end
 =#
 
 # Let's momentarily use a fitness function that seeks out a 16-bit digitized
-# sine wave on 20 points, separated by 1 radian apiece (so 2pi points per cycle).
-# This is just a test of how many iterations it takes to converge to a waveform.
-# With settings 
-# popSize = 1000
-# selfWeight = neighborWeight = 1
-# neighborhoodMin = 10
-# inertiaMin = 0.007
-# inertiaMax = 0.5
-# we get convergence to the global optimum in 75 iterations
-#
-# With the same parameters but adjusting the fitness to seek out a 200-point function
-# rather than a 20-point function, we converge in about 350 iterations.
-function fitness(params::Array{Int,1})
-  return -log(sum([(params[i]-16384*(1+sin(i)))^2
-  	                               for i in 1:length(params)]))
+# sine wave on 20 points, separated by 1 radian apiece (2pi points per cycle).
+# This is just a test of how many iterations it takes to converge to a waveform
+
+function fitness(params::Array{Int16,1})
+  temp = sum([(params[i]-16384*(1+sin(i)))^2
+  	                               for i in 1:length(params)])
+  -log(temp)#+2cos(sqrt(temp)), temp # Include this for potential barriers
 end
 
 type Particle
@@ -398,32 +388,46 @@ Particle(x, v) = Particle(x, fitness(x), v)
 # Base.isless is defined.
 Base.isless(x::Particle, y::Particle) = x.currentFitness < y.currentFitness
 
-# Implement PSO where position is a vector of integers.
-# Still need to find sensible default values for our application so the args list
-# isn't overwhelming and confusing every time.
-function psoSkeleton(popSize::Int,
-	        boundsMin::Array{Int,1}, boundsMax::Array{Int,1},
+# Implement PSO where position is a vector of integers (a waveform).
+# Still need to find sensible default values for our application so the args
+# list isn't overwhelming and confusing every time.
+
+# Using the 20-point fitness function
+# popSize = 100
+# selfWeight = neighborWeight = 1
+# neighborhoodMin = 10
+# inertiaMin = 0.007
+# inertiaMax = 0.5
+# we get convergence to the global optimum in ~75 iterations
+#
+# With the same parameters but adjusting the fitness to seek out a 200-point
+# function rather than a 20-point function, we converge in about 350 iterations
+#
+# The pop size should be larger than the number of arguments in all cases
+# The inertia, selfWeight and neighborWeight should be of comparable magnitude
+function waveformPSO(popSize::Integer,
+	        boundsMin::Array{Int16,1}, boundsMax::Array{Int16,1},
 	        selfWeight, neighborWeight,
-	        neighborhoodMin::Int,
+	        neighborhoodMin::Integer,
 	        inertiaMin, inertiaMax,
-	        maxIterations::Int)
+	        maxIterations::Integer)
 
   # Initialize a pool of "Popsize" Particles, with each element in the bounds
-  startingPos = hcat(map((x,y) -> rand(x:y, popSize), boundsMin, boundsMax)...)'
-  startingVel = hcat(map(x -> rand(-x:x, popSize), boundsMax - boundsMin)...)'
+  startingPos = hcat(map((x,y)-> rand(x:y, popSize), boundsMin, boundsMax)...)'
+  startingVel = hcat(map(x-> rand(-x:x, popSize), boundsMax - boundsMin)...)'
   populationInfo = [Particle(startingPos[:,i], startingVel[:,i])
                     for i in 1:popSize]
   winner = findmax(populationInfo)[1]
 
   # Initialize our running PSO variables
-  (winnerX, winnerF) = (winner.position, winner.currentFitness)
+  winnerX, winnerF = winner.position, winner.currentFitness
   N = neighborhoodMin
   W = inertiaMax
   stallCounter = 0
   iters = 0
 
   # An iteration.
-  while(iters < maxIterations && stallCounter < 100)
+  while(iters < maxIterations )#&& stallCounter < 100)
     improvementFlag = false
   
     # For each element find a subset of length N not including
@@ -432,22 +436,22 @@ function psoSkeleton(popSize::Int,
                       for i in 1:popSize]
     localWinners = map(n -> findmax(populationInfo[n])[1], neighborhoods)
   
-    # New velocities are a weighted sum of old velocity, distance to local winner
-    # and distance from personal best
-    map((x,y) -> x.velocity = W*x.velocity +
-    	       selfWeight*rand(length(x.position)).*(x.bestPosition - x.position)
-             + neighborWeight*rand(length(x.position)).*(y.position - x.position),
-                 populationInfo, localWinners)
+    # New velocities are a weighted sum of old velocity, distance to local
+    # winner and distance from personal best
+    map((x,y) -> x.velocity = ((W*x.velocity +
+    	     selfWeight*rand(length(x.position)).*(x.bestPosition - x.position)
+         + neighborWeight*rand(length(x.position)).*(y.position - x.position))
+         / (W + selfWeight/2 + neighborWeight/2), populationInfo, localWinners)
   
     # Update the positions based on these new velocities (can you tell I prefer
-    # functional programming?).  The bit with abs is to clip it to the proper range.
+    # functional programming?). We clip it to the proper range.
     map(x -> x.position = map((p,lo,hi) ->
     	  div(lo + hi + abs(Int(round(p))-lo) - abs(Int(round(p))-hi), 2),
     	  x.position + x.velocity, boundsMin, boundsMax), populationInfo)
   
-    # Update the current fitness.  If it is better than the old fitness, save the
-    # current position.  If it is the best seen so far, udpate best fitness.  This
-    # one will be done sequentially since the fitness calls can't be parallelized.
+    # Update the current fitness.  If it is better than the old fitness, save
+    # current position.  If it is the best seen so far, udpate best fitness.
+    # Done sequentially since the fitness calls can't be parallelized.
     for x in populationInfo
         x.currentFitness = fitness(x.position)
         if (x.currentFitness > x.bestFitness)
@@ -455,7 +459,7 @@ function psoSkeleton(popSize::Int,
         	x.bestFitness = x.currentFitness
         end
         if (x.currentFitness > winnerF)
-        	(winnerX, winnerF) = (x.position, x.currentFitness)
+        	winnerX, winnerF = x.position, x.currentFitness
         	improvementFlag = true
         end
     end
@@ -483,7 +487,7 @@ function psoSkeleton(popSize::Int,
   end # End loop 
 
   # Return our best found position and its fitness score
-  (winnerX, winnerF)
+  winnerX, winnerF
 
 end
 
