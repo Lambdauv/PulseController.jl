@@ -368,7 +368,8 @@ end
 function fitness(params::Array{Int16,1})
   temp = sum([(params[i]-16384*(1+sin(i)))^2
   	                               for i in 1:length(params)])
-  -log(temp)#+2cos(sqrt(temp)), temp # Include this for potential barriers
+  # sleep(0.01) # Include this to emulate measurement time
+  -log(temp)#+2cos(sqrt(temp)) # Include this for potential barriers
 end
 
 type Particle
@@ -407,14 +408,14 @@ Base.isless(x::Particle, y::Particle) = x.currentFitness < y.currentFitness
 # The inertia, selfWeight and neighborWeight should be of comparable magnitude
 function waveformPSO(popSize::Integer,
 	        boundsMin::Array{Int16,1}, boundsMax::Array{Int16,1},
-	        selfWeight, neighborWeight,
-	        neighborhoodMin::Integer,
-	        inertiaMin, inertiaMax,
-	        maxIterations::Integer)
+          neighborhoodMin::Integer,
+          maxIterations::Integer,
+          inertiaMin=0.007, inertiaMax=0.5,
+	        selfWeight=1, neighborWeight=1)
 
   # Initialize a pool of "Popsize" Particles, with each element in the bounds
-  startingPos = hcat(map((x,y)-> rand(x:y, popSize), boundsMin, boundsMax)...)'
-  startingVel = hcat(map(x-> rand(-x:x, popSize), boundsMax - boundsMin)...)'
+  startingPos = hcat(map((x,y) -> rand(x:y, popSize), boundsMin, boundsMax)...)'
+  startingVel = hcat(map(x -> rand(-x:x, popSize), boundsMax - boundsMin)...)'
   populationInfo = [Particle(startingPos[:,i], startingVel[:,i])
                     for i in 1:popSize]
   winner = findmax(populationInfo)[1]
@@ -427,7 +428,7 @@ function waveformPSO(popSize::Integer,
   iters = 0
 
   # An iteration.
-  while(iters < maxIterations )#&& stallCounter < 100)
+  while(iters < maxIterations && stallCounter < 100)
     improvementFlag = false
   
     # For each element find a subset of length N not including
@@ -438,15 +439,15 @@ function waveformPSO(popSize::Integer,
   
     # New velocities are a weighted sum of old velocity, distance to local
     # winner and distance from personal best
-    map((x,y) -> x.velocity = ((W*x.velocity +
+    map((x,y) -> x.velocity = W*x.velocity +
     	     selfWeight*rand(length(x.position)).*(x.bestPosition - x.position)
-         + neighborWeight*rand(length(x.position)).*(y.position - x.position))
-         / (W + selfWeight/2 + neighborWeight/2), populationInfo, localWinners)
+         + neighborWeight*rand(length(x.position)).*(y.position - x.position)
+         , populationInfo, localWinners)
   
     # Update the positions based on these new velocities (can you tell I prefer
     # functional programming?). We clip it to the proper range.
     map(x -> x.position = map((p,lo,hi) ->
-    	  div(lo + hi + abs(Int(round(p))-lo) - abs(Int(round(p))-hi), 2),
+    	  Int16(div(lo + hi + abs(Int(round(p))-lo) - abs(Int(round(p))-hi), 2)),
     	  x.position + x.velocity, boundsMin, boundsMax), populationInfo)
   
     # Update the current fitness.  If it is better than the old fitness, save
