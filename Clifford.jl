@@ -121,16 +121,16 @@ const ZLine = false
 # This is essentially an enum, but the numbers are chosen to have some later
 # significance.  Note the null gate is empty rather than idle.
 const nul = Array(Int8,(0,1))
-const I =     fill(Int8(10),(1,1))
+const I =     fill(Int8(7),(1,1))
 const Xpi2 =  fill(Int8(1),(1,1))
 const Xpi =   fill(Int8(5),(1,1))
 const X3pi2 = fill(Int8(3),(1,1))
 const Ypi2 =  fill(Int8(2),(1,1))
 const Ypi =   fill(Int8(6),(1,1))
 const Y3pi2 = fill(Int8(4),(1,1))
-const Zpi2 =  fill(Int8(7),(1,1))
-const Zpi =   fill(Int8(8),(1,1))
-const Z3pi2 = fill(Int8(9),(1,1))
+const Zpi2 =  fill(Int8(8),(1,1))
+const Zpi =   fill(Int8(9),(1,1))
+const Z3pi2 = fill(Int8(10),(1,1))
 const CZ =    Int8[15 15]  # CZ requires 2 qubits to implement.
 
 const SQPulse = (ZLine ?
@@ -418,8 +418,10 @@ const sampleRate = 1e9
 # we would need a longer list.  Not sure if "const" is appropriate.  The
 # pretendIndexCounter is a placeholder to simulate the behavior of the FPGA,
 # assigning new waveforms to the first available place in its memory.
-const idles = [0]
-global pretendIndexCounter = 0
+
+awg = InsAWG5014C() # Takes a visession argument?
+idles = Dict(awg => "I") # For AWG, indices are strings.
+pretendIndexCounter = 0
 
 #========================== The Waveform DataTypes ============================#
 # There are two approaches we could take for storing waveforms.
@@ -443,6 +445,14 @@ global pretendIndexCounter = 0
 #       needing to be altered in some way beforehand.  For sequencing, all
 #       lines draw from the waveform data for the gate at hand, meaning all
 #       gates can nominally be independent lengths.
+
+# In the event we are controlling a qubit with XY only, we need to adapt the
+# ExactWaveform type to hold XYI and XYQ but not Z.  This will consist of length
+# matched pulses on XYI and XYQ and an empty pulse on Z.  The lengths do not
+# need to match the idle length, because the Z line simply doesn't exist.  Due
+# to this necessity, I have removed the strict length-matching conditions on
+# newly created ExactWaveform objects.  TODO: Find consistent set of checks
+# for errors in initialization.  I don't want users sending pulses out of phase.
 
 # When doing PSO and other optimization, it seems sensible to begin with the
 # first approach to get a good gate, and then tune it up further with the second
@@ -474,12 +484,14 @@ type ExactWaveform <: Waveform
   # inactive lines.  All active lines must be length matched to the idle pulse.
   # If not, the only constraint is that all lines must be length matched to
   # one another.  Hence, 3 lines of comparators.  Julia allows x == y == z.
-  ExactWaveform(XYI, XYQ, Z, dirty) =
+
+  # 9/9/16 - disabled constructor to accomodate exact XY-only control.
+#=  ExactWaveform(XYI, XYQ, Z, dirty) =
     (length(XYI) == length(XYQ) == length(Z) ||
      length(XYI) == length(XYQ) == floatIdleLength && length(Z) == 0 ||
      length(XYI) == length(XYQ) == 0 && length(Z) == floatIdleLength) ?
     new(XYI, XYQ, Z, dirty) :
-    error("Incompatible waveform lengths")
+    error("Incompatible waveform lengths") =#
 end
 
 # Make ExactWaveforms readable
@@ -491,7 +503,7 @@ function string(x::ExactWaveform)
   str *= "\nXYQ: "
   str *= length(x.XYQ) > 0 ? string([Int(c) for c in x.XYQ]) : "idle"
   str *= "\nZ: "
-  str *= length(x.Z) > 0 ? string([Int(c) for c in x.Z]) : "idle"
+  str *= length(x.Z) > 0 ? string([Int(c) for c in x.Z]) : "idle/undefined"
 end
 
 import Base.print
@@ -505,14 +517,36 @@ show(io::IO, x::ExactWaveform) = print(io, x)
 # For the purposes of this code, the only info needed about a qubit is its
 # resonant frequency relative to the local oscillator, which boards/lines
 # are able to communicate with it, and the on-board data for gates.
-type Qubit
+
+# Depending on if lines permit, we can control our qubits with only XY control
+# or with full XYZ.  If the Z line is absent, the underlying type is a QubitNoZ,
+# and if present it is a QubitWithZ.  The user only creates "Qubit" objects,
+# and depending on whether a Z line is specified, the program generates the
+# proper concrete type.
+
+abstract Qubit
+
+importall InstrumentControl
+# Later, we will import other applicable control instrument types, like FPGAs
+
+type QubitWithZ <: Qubit
   IFreq::Float64
-  lineXYI::Tuple{Int,Int} # (board, channel)
-  lineXYQ::Tuple{Int,Int} #  "
-  lineZ::Tuple{Int,Int}   #  " if applicable, or (0,0) if not.
-  pulseConvert::Matrix{Int16} # Fixed size matrix.  If ZLine is true, 10x3,
-                              # otherwise 10x2.  It maps the 10 basic pulses
-                              # to their respective indices in the DAC's memory
+  lineXYI::Tuple{Instrument,Int} # (board, channel)
+  lineXYQ::Tuple{Instrument,Int} #  "
+  lineZ::Tuple{Instrument,Int}   #  "
+  pulseConvert::Matrix        # 10x3 matrix, which maps the 10 basic pulses
+                              # to how the DAC's memory refers to them
+
+  waveforms::Dict{Pulse, ExactWaveform} # See below.
+end
+
+type QubitNoZ <: Qubit
+  IFreq::Float64
+  lineXYI::Tuple{Instrument,Int} # (board, channel)
+  lineXYQ::Tuple{Instrument,Int} #  "
+  pulseConvert::Matrix        # 7x2 mapping basic pulses to XYI and XYQ labels
+                              # in the DAC's memory (for AWG, this is strings,
+                              # for reasons that only frustrate me..)
 
   waveforms::Dict{Pulse, ExactWaveform} # See below.
 end
@@ -524,7 +558,7 @@ end
 # the ExactWaveform produced depends on the Pulse and on the IFreq of the qubit.
 import Base.setindex!
 function setindex!(q::Qubit, w::Vector{Float64}, p::Pulse)
-  if p[1] == 10
+  if p[1] == 7
     q.waveforms[p] = ExactWaveform(UInt16[], UInt16[], UInt16[], true)
   elseif length(w) != floatIdleLength
       error("FloatWaveform pulses must contain exactly "*
@@ -532,9 +566,11 @@ function setindex!(q::Qubit, w::Vector{Float64}, p::Pulse)
   elseif p[1] < 7
     (xyi, xyq) = IQgen(q.IFreq, p, w)
     q.waveforms[p] = ExactWaveform(xyi, xyq, UInt16[], true)
-  elseif p[1] < 10
+  elseif p[1] < 11 && isa(q, QubitWithZ)
     q.waveforms[p] = ExactWaveform(UInt16[], UInt16[], 
                     map(x -> UInt16(offsetValue + round(x)), w), true)
+  else # Trying to set Z gates on a QubitNoZ object
+    println("Warning: no gates set by this operation.")
   end
 end
 
@@ -560,8 +596,12 @@ end
 
 # For ExactWaveforms, use them as they are.
 function setindex!(q::Qubit, w::ExactWaveform, p::Pulse)
-  w.dirty = true
-  q.waveforms[p] = w
+  if p[1] < 7 || isa(QubitWithZ)
+    w.dirty = true
+    q.waveforms[p] = w
+  else # Trying to set Z gates on a QubitNoZ object
+    println("Warning: no gates set by this operation.")
+  end
 end
 
 # Always display the ExactWaveform for the user to see.
@@ -574,14 +614,21 @@ end
 
 # A user shouldn't have to specify the matrix or the dictionary to define a
 # qubit.  All that they should have to input is IFreq and the line info.
+# A user can specify "False" for the Z line to generate a QubitNoZ object,
+# or omit it entirely.
 function Qubit(IFreq::Float64, lineXYI::Tuple{Int,Int}, lineXYQ::Tuple{Int,Int},
-               lineZ::Tuple{Int,Int})
+               lineZ=false)
+  if isa(lineZ, Bool) && !lineZ
+    ret = QubitNoZ(IFreq, lineXYI, lineXYQ, fill(-1, (7,2)), Dict())
+  elseif isa(lineZ, Tuple)
+    ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill(-1, (10,3)), Dict())
+  end
   println("To initialize pulse shapes for this Qubit, please run one of the "*
            "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")
-  Qubit(IFreq, lineXYI, lineXYQ, lineZ, fill(-1, (10,3)), Dict())
+  ret
 end
 
-# Initializing the dictionary shouldn't require manually inputting 10
+# Initializing the dictionary shouldn't require manually inputting up to 10
 # different pulse shapes, so we provide quick ways to make gaussian-envelope and
 # cos-envelope pulses.  These are all FloatWaveform objects with all the
 # assumptions mentioned above.  We also provide a generalInit function that
@@ -593,7 +640,8 @@ end
 
 # The XY and Z arguments specify whether the pulses created are for the XY
 # control or the Z control.  By default, both are on, but it is likely the
-# ideal amplitude for each is different.
+# ideal amplitude for each is different.  For QubitNoZ objects, setting Z to
+# true or false makes no difference.
 function gaussInit(q::Qubit, amplitude, sigma, XY::Bool = true, Z::Bool = true)
   pulseShape = [amplitude*exp(-(x - (floatIdleLength + 1)/2)^2 / (2*sigma^2))
                                 for x in 1:floatIdleLength]
@@ -612,12 +660,12 @@ function generalInit(q::Qubit, pulseShape, XY::Bool = true, Z::Bool = true)
     q[Xpi] = q[Ypi] = pulseShape
     q[Xpi2] = q[Ypi2] = q[X3pi2] = q[Y3pi2] = pulseShape/2
   end
-  if Z
+  if Z && isa(q, QubitWithZ)
     q[Zpi] = pulseShape
     q[Zpi2] = pulseShape/2
     q[Z3pi2] = -pulseShape/2
   end
-  if q.pulseConvert[10] == -1
+  if q.pulseConvert[7] == -1
     q[I] = [0.0]
   end
   prepForSeq(q)
@@ -642,23 +690,41 @@ function prepForSeq(q::Qubit)
   # Communicate with DAC only if necessary
   for p in q.waveforms
     if p[2].dirty
-      q.pulseConvert[p[1],1] = pushWaveform(p[2].XYI, q.lineXYI[1])
-      q.pulseConvert[p[1],2] = pushWaveform(p[2].XYQ, q.lineXYQ[1])
-      q.pulseConvert[p[1],3] = pushWaveform(p[2].Z, q.lineZ[1])
+      q.pulseConvert[p[1],1] = pushWaveform(p[2].XYI, q.lineXYI[1], string(p[1])*"I")
+      q.pulseConvert[p[1],2] = pushWaveform(p[2].XYQ, q.lineXYQ[1], string(p[1])*"Q")
+      if isa(q, QubitWithZ)
+        q.pulseConvert[p[1],3] = pushWaveform(p[2].Z, q.lineZ[1])
+      end
       p[2].dirty = false
     end
   end
 end
 
 # Return the index of the waveform in memory
-function pushWaveform(wavedata::Vector{UInt16}, board::Int)
+function pushWaveform(wavedata::Vector{UInt16}, board::Instrument, name="")
   if length(wavedata) == 0
     # This is one of the off channels of a FloatWaveform.  Just return the
     # stored index of idle pulse
     return idles[board]
   end
-  # AWG specific
-  return awgPush(wavedata)
+  if isa(board, InsAWG5014C)
+    return awgPush(wavedata, board, name)
+  else
+    error("Instrument not supported yet, whine at a programmer")
+  end
+end
+
+# We will be using the VISA protocol and binary writing.  We will also force
+# every waveform to 250 points, with front-padded zeros.  A 30-point waveform
+# will then have 220 points of offsetValue and then 30 points with signal.
+function awgPush(wavedata::Vector{UInt16}, ins::InsAWG5014C, name::String)
+  if length(wavedata) > 250
+    error("Waveforms longer than 250 points not presently supported.")
+  else
+    binblockwrite(ins, "WLIST:WAV:DATA "*name*", "*reinterpret(UInt8,
+      [fill(offsetValue, 250 - length(wavedata)); map(htol, wavedata)]))
+  end
+  name # Return the name, how the AWG will refer to it later.
 end
 
 # The following functions take pulse sequences in the form produced by the code,
@@ -667,12 +733,38 @@ end
 # and Z pulses according to the prior definitions of these pulses.  
 function sendSequence(q::Qubit, sequence::Pulse)
   if size(sequence, 2) == 1
-    sendSequence(q, sequence[:,])
+    sendSequence(q, sequence[:])
   else
     error("Please specify only one sequence\n")
   end
 end
 
+
+function sendSequence(q::Qubit, sequence::Vector{Int8})
+  # Make sure we aren't going to send obsolete pulses
+  # (no writes done if everything is current)
+  prepForSeq(q)
+
+  # TODO: More generalized version of this function.  For now, we assume the
+  # qubit is controlled by the AWG, that it is a QubitNoZ object, and that
+  # the other AWG lines need to idle until the sequence terminates, and then
+  # perform a readout pulse.  This allows the sequencing to be done in one
+  # (albeit large) command to the AWG.  If this isn't the goal, bug Brett.
+  len = "SEQ:LENG "*string(length(sequence))*"\n"
+  istring = map((x,y)-> "SEQ:ELEM"*string(x)*":WAV"*string(q.lineXYI[2])*" \""*y*"\"\n",
+                                1:length(sequence), q.pulseConvert[sequence, 1])
+  qstring = map((x,y)-> "SEQ:ELEM"*string(x)*":WAV"*string(q.lineXYQ[2])*" \""*y*"\"\n",
+                                1:length(sequence), q.pulseConvert[sequence, 2])
+  # Get the other channels, which are IQ for readout, and instruct them to be
+  # idle at this time
+  a = 1:4
+  a = a[(a.!=q.lineXYI[2])&(a.!=q.lineXYQ[2])] # Select channels not used by XY
+  idle1 = map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[1])*" \"I\"\n")
+  idle2 = map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[1])*" \"I\"\n")
+  # Put it all together and send to the AWG
+  println(*(len, istring..., qstring..., idle1..., idle2...))
+end
+#=
 function sendSequence(q::Qubit, sequence::Vector{Int8})
   # Make sure we aren't going to send obsolete pulses
   # (no writes done if everything is current)
@@ -681,7 +773,9 @@ function sendSequence(q::Qubit, sequence::Vector{Int8})
   # that correspond to the sequence requested
   seqLowLevel(q.pulseConvert[sequence, 1], q.lineXYI)
   seqLowLevel(q.pulseConvert[sequence, 2], q.lineXYQ)
-  seqLowLevel(q.pulseConvert[sequence, 3], q.lineZ)
+  if isa(q, QubitWithZ)
+    seqLowLevel(q.pulseConvert[sequence, 3], q.lineZ)
+  end
   # Turn on output where along this path?
 
   # How to manage readout?  Do we send a trigger pulse along with the last
@@ -690,30 +784,7 @@ function sendSequence(q::Qubit, sequence::Vector{Int8})
   # sent are necessarily to be followed by readout, so I guess readout-
   # terminated sequences get their own method.
 end
-
-# TODO:
-# Sends the listed sequence followed immediately by a readout of the qubit.
-# Returns 0 or 1 denoting the qubit state.
-function sendSequenceAndReadout(q::Qubit, sequence::Vector{Int8})
-  return rand() < 0.998^length(sequence) ? 0 : rand(0:1) # depolarized
-end
-
-function seqLowLevel(indices::Vector{Int16}, boardAndChannel::Tuple{Int,Int})
-  # Beyond here requires specifics of the type of DAC and the input it expects.
-  # All this function needs to do is get the board to output on the specified
-  # channel a sequence consisted of pasting together the waveforms located at
-  # "indices."  Length matching and other issues have been taken care of at a
-  # higher level, hopefully.
-  if -1 in indices
-    error("Qubit sequences not adequately initialized")
-  else
-    println("If code were written, I'd be writing sequences")
-    println(indices)
-    println("Goes to board "*string(boardAndChannel[1])*" channel "*
-                             string(boardAndChannel[2]))
-  end
-end
-
+=#
 # Nothing here covers readout or two-qubit gates.  Both are heirarchically
 # lateral from the qubits themselves - pairs of coupled qubits need to know
 # waveforms for 2-qubit gates, but not the qubits themselves.  The readout
@@ -924,26 +995,34 @@ end
 # we are away from the AWG by that point.  FPGAs would be far cheaper for many-
 # qubit systems.
 
-# We will be using the VISA protocol and binary writing.  We will also force
-# every waveform to 250 points, with front-padded zeros.  A 30-point waveform
-# will then have 220 points of offsetValue and then 30 points with signal.
-function awgPush(ins, wavedata::Vector{UInt16})
-  if length(wavedata) > 250
-    error("Waveforms longer than 250 points not presently supported.")
-  else
-    binblockwrite(ins, "WLIST:WAV:DATA "*reinterpret(UInt8,
-      [zeros(UInt16, 250 - length(wavedata)); map(htol, wavedata)]))
-  end
+
+
+function awgSeq()
+
 end
 
 # The reality of working with the AWG - we are limited to two lines of control.
 # The readout pulse requires phase sensitivity and thus IQ mixing, using two of
 # the four lines.  That means that we have to perform the single-qubit 
-# clifford gates using no Z control.
+# clifford gates using no Z control.  Until we have FPGA control, all our qubits
+# will be QubitNoZ type.
 
-# Using the fact that our gates are all excessively long, we will instead push
-# Z pulses as combined X and Y pulses, still fitting easily into the 250 point
-# constraint.  All Z lines will be inactive.
+# I would like to see how quickly a new sequence can be loaded to the AWG.
+# Ideally, it requires very few writes and can be done in the tens of
+# microseconds when the qubit is T1-relaxing to the ground state.  Realistically
+# though, the AWG is not made for this.  The communication protocol relies on
+# sending waveforms by name and sequencing one index at a time.  To send a 30-
+# gate sequence would require a command string such as the following
+# "SEQ:LENG 31"
+# "SEQ:ELEM1:WAV1 "Xpi2I""
+# "SEQ:ELEM1:WAV2 "Xpi2Q""
+# "SEQ:ELEM2:WAV1 "YpiI""
+# "SEQ:ELEM2:WAV2 "YpiQ""
+# ...
+# "SEQ:ELEM30:WAV1 "XpiI""
+# "SEQ:ELEM30:WAV2 "XpiQ""
+# which is 61 individual commands.
 
-# For this, we can add an "ignore Z" flag to the sequence generator that
-# uses different pulses to achieve the single-qubit Clifford gates.
+# The commands may be sent as a single string, which could be nicer for latency.
+# The waveforms need to have names (instead of indices), so I guess when a qubit
+# has the AWG as its instrument, the 7x2 matrix actually stores strings.
