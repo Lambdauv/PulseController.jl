@@ -2,6 +2,7 @@ module ORBIT
 
 using ..ParticleSwarm
 using ..Sequencing # Includes Clifford, Waveforms, and Qubit
+using ..Waveforms
 
 # Fitness calls here are of the form
 # "How well does <waveform> implement <pulse> on <qubit>?"
@@ -44,7 +45,8 @@ function optimize(q::Qubit, p::Pulse, numpoints::Integer, init::Waveform)
     guess = init.wavedata
   end
 
-  if p[1] < 7 && isa(q.lineXYI[1], InstrumentControl.InsAWG5014C) # XY on AWG
+  # TODO
+  # if p[1] < 7 && isa(q.lineXYI[1], InstrumentControl.InsAWG5014C) # XY on AWG
 end
 
 end # End module ORBIT

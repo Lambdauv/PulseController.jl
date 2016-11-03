@@ -21,7 +21,7 @@ include("sequencing.jl")
 include("particleswarm.jl")
 include("orbit.jl")
 
-using .ORBIT # Carries all other modules
+import .Sequencing
 export sendSequence
 
 # For writing out sequences, we will provide all of the pulse names.  Hopefully
@@ -30,15 +30,15 @@ import .Clifford: Idle, Xpi, Xpi2, X3pi2, Ypi, Ypi2, Y3pi2, Zpi, Zpi2, Z3pi2, CZ
 export Idle, Xpi, Xpi2, X3pi2, Ypi, Ypi2, Y3pi2, Zpi, Zpi2, Z3pi2, CZ
 
 # From qubits
+import .Qubits: Qubit, cosInit, gaussInit, generalInit
 export Qubit
 export cosInit
 export gaussInit
 export generalInit
 
 # From waveforms, for setting qubit waveforms manually
+import .Waveforms: FloatWaveform, ExactWaveform
 export FloatWaveform
 export ExactWaveform
 
 end # End module PulseController
-
-using PulseController # Bad style probably
