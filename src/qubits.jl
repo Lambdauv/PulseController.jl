@@ -114,15 +114,16 @@ end
 # A user shouldn't have to specify the matrix or the dictionary to define a
 # qubit.  All that they should have to input is IFreq and the line info.
 
-function Qubit(IFreq::Float64, lineXYI::Tuple{Int,Int}, lineXYQ::Tuple{Int,Int})
+function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
+        lineXYQ::Tuple{Instrument,Int})
     ret = QubitNoZ(IFreq, lineXYI, lineXYQ, fill(-1, (7,2)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
            "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")
     ret
 end
 
-function Qubit(IFreq::Float64, lineXYI::Tuple{Int,Int}, lineXYQ::Tuple{Int,Int},
-    lineZ::Tuple{Instrument,Int})
+function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
+    lineXYQ::Tuple{Instrument,Int}, lineZ::Tuple{Instrument,Int})
 
     ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill(-1, (10,3)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
