@@ -1,7 +1,6 @@
 module Sequencing
 
 using ..Qubits # Includes Clifford and Waveforms
-using ..Readout
 using InstrumentControl
 using InstrumentControl.AWG5014C
 using Alazar # For readout

@@ -42,12 +42,14 @@
 # and this potentially gives us the ability to add to the qubit's dictionary any
 # optimized waveform for arbitrary pulse sequences.
 module Waveforms
+
+export Waveform
 export FloatWaveform
 export ExactWaveform
 
 abstract Waveform
 
-type FloatWaveform
+type FloatWaveform <: Waveform
   wavedata::Vector{Float64}
 end
 

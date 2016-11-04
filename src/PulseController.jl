@@ -22,6 +22,7 @@ include("particleswarm.jl")
 include("orbit.jl")
 
 using .ORBIT # Carries all other modules
+
 export sendSequence
 
 # For writing out sequences, we will provide all of the pulse names.  Hopefully
