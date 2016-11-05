@@ -9,12 +9,15 @@ export cosInit
 export gaussInit
 export generalInit
 
-# From clifford
+# From Clifford
 export benchmark1Qubit
 export benchmark2Qubit
 export Pulse
 export gateNames
 
+# From Waveforms
+export FloatWaveform
+export ExactWaveform
 #========================== The Qubit DataType ================================#
 # For the purposes of this code, the only info needed about a qubit is its
 # resonant frequency relative to the local oscillator, which boards/lines
@@ -116,6 +119,10 @@ end
 
 function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
         lineXYQ::Tuple{Instrument,Int})
+    if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
+      println("WARNING: given IFreq will cause inconsistent phase within "*
+              "consecutive 250ns pulses")
+    end
     ret = QubitNoZ(IFreq, lineXYI, lineXYQ, fill(-1, (7,2)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
            "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")
@@ -125,6 +132,11 @@ end
 function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
     lineXYQ::Tuple{Instrument,Int}, lineZ::Tuple{Instrument,Int})
 
+    if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C) ||
+        isa(lineZ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
+      println("WARNING: given IFreq will cause inconsistent phase within "*
+              "consecutive 250ns pulses")
+    end
     ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill(-1, (10,3)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
             "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")

@@ -47,7 +47,7 @@ randBetween(min, max, amount=1) = min + (max - min)*rand(amount)
 
 # Our PSO requires all parameters be real valued so that there is a sense of
 # being between bounds.  It could be better generalized to anything comparable,
-# but I am using function that assume real numbers.
+# but I am using functions that assume real numbers.
 
 function PSO{T<:Real}(
           fitness::Function,

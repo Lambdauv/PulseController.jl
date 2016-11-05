@@ -21,7 +21,7 @@ include("sequencing.jl")
 include("particleswarm.jl")
 include("orbit.jl")
 
-import .Sequencing
+import .Sequencing: sendSequence
 export sendSequence
 
 # For writing out sequences, we will provide all of the pulse names.  Hopefully

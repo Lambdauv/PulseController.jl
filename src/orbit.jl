@@ -4,6 +4,26 @@ using ..ParticleSwarm
 using ..Sequencing # Includes Clifford, Waveforms, and Qubit
 using ..Waveforms
 
+# Buckets of Export statements
+
+# From sequencing
+export sendSequence
+
+# From qubits
+export Qubit
+export cosInit
+export gaussInit
+export generalInit
+
+# From waveforms
+export FloatWaveform
+export ExactWaveform
+
+# From clifford
+export benchmark1Qubit
+export benchmark2Qubit
+export Pulse
+
 # Fitness calls here are of the form
 # "How well does <waveform> implement <pulse> on <qubit>?"
 
@@ -31,7 +51,7 @@ function fitness(params::Vector{Float64}, q::Qubit, p::Pulse)
 end
 
 
-function optimize(q::Qubit, p::Pulse, numpoints::Integer, init::Waveform)
+function optimize(q::Qubit, p::Pulse, numpoints::Integer, init::Sequencing.Qubits.Waveform)
   if isa(init, ExactWaveform)
     if isa(q, QubitWithZ)
       varCount = 3*numpoints
@@ -46,7 +66,8 @@ function optimize(q::Qubit, p::Pulse, numpoints::Integer, init::Waveform)
   end
 
   # TODO
-  # if p[1] < 7 && isa(q.lineXYI[1], InstrumentControl.InsAWG5014C) # XY on AWG
+  if p[1] < 7 && isa(q.lineXYI[1], InstrumentControl.InsAWG5014C) # XY on AWG
+  end
 end
 
 end # End module ORBIT
