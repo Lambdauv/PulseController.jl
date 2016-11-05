@@ -46,6 +46,9 @@ module Waveforms
 export Waveform
 export FloatWaveform
 export ExactWaveform
+export floatIdleLength
+
+const floatIdleLength = 30
 
 abstract Waveform
 

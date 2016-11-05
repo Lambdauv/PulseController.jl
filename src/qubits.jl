@@ -132,7 +132,7 @@ end
 function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
                                lineXYQ::Tuple{Instrument,Int},
                lineZ=false)
-  if IFreq % 4e6
+  if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
     println("WARNING: given IFreq will cause inconsistent phase within "*
             "consecutive 250ns pulses")
   end

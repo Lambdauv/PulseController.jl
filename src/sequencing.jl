@@ -45,14 +45,14 @@ function prepForSeq(q::Qubit)
       q.pulseConvert[p[1],1] = pushWaveform(p[2].XYI, q.lineXYI[1], gateNames[p[1]]*"I")
       q.pulseConvert[p[1],2] = pushWaveform(p[2].XYQ, q.lineXYQ[1], gateNames[p[1]]*"Q")
       if isa(q, QubitWithZ)
-        q.pulseConvert[p[1],3] = pushWaveform(p[2].Z, q.lineZ[1])
+        q.pulseConvert[p[1],3] = pushWaveform(p[2].Z, q.lineZ[1], gateNames[p[1]])
       end
       p[2].dirty = false
     end
   end
 end
 
-# Return the index of the waveform in memory
+# Return the label of the waveform in memory
 function pushWaveform(wavedata::Vector{UInt16}, board::Instrument, name="")
   if length(wavedata) == 0
     # This is one of the off channels of a FloatWaveform.  Just return the
@@ -69,6 +69,7 @@ end
 # We will be using the VISA protocol and binary writing.  We will also force
 # every waveform to 250 points, with front-padded zeros.  A 30-point waveform
 # will then have 220 points of offsetValue and then 30 points with signal.
+import InstrumentControl.AWG5014C: offsetValue
 function awgPush(wavedata::Vector{UInt16}, ins::InsAWG5014C, name::String)
   if length(wavedata) > 250
     error("Waveforms longer than 250 points not presently supported.")
