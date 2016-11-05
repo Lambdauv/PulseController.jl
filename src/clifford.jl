@@ -31,14 +31,83 @@
 # of UInt8s, taking things mod 5 at the end of a calculation.
 
 module Clifford
+
 export benchmark1Qubit
 export benchmark2Qubit
 export Pulse
 export gateNames
 
-# Andrew's pull request uses SMatrix and creates CMatrix type instead of alias,
-# resulting in Base compatibility and ~5x speedup with computations.
-typealias CMatrix Matrix{UInt8}
+import Base: convert
+import Base: getindex, size
+import Base: show, showarray, summary
+import Base: normalize, *, inv, kron
+
+using StaticArrays
+using Core.Intrinsics: box, unbox
+
+immutable CMatrix{S,L} <: StaticMatrix{UInt8}
+    data::NTuple{L,UInt8}
+
+    function CMatrix(d::NTuple{L,UInt8})
+        StaticArrays.check_smatrix_params(Val{S}, Val{S}, UInt8, Val{L})
+        new(d)
+    end
+
+    function CMatrix(d::NTuple{L})
+        StaticArrays.check_smatrix_params(Val{S}, Val{S}, UInt8, Val{L})
+        new(StaticArrays.convert_ntuple(UInt8, d))
+    end
+end
+
+function CMatrix(x::Tuple)
+    L = length(x)
+    S = sqrt(L)
+    if !isinteger(S)
+        error("Must provide a square number of elements.")
+    end
+    CMatrix{Int(S),L}(x)
+end
+
+@generated function (::Type{CMatrix{S1}}){S1,L}(x::NTuple{L})
+    if S1*S1 != L
+        error("Incorrect matrix size: $S1 * $S1 != $L.")
+    end
+    return quote
+        $(Expr(:meta, :inline))
+        CMatrix{S1, L}(x)
+    end
+end
+
+# StaticArrays interfacing
+@inline size{S,L}(::Union{CMatrix{S,L}, Type{CMatrix{S,L}}}) = (S,S)
+@inline getindex(A::CMatrix, i::Integer) = A.data[i]
+
+# Here's how we are going to display these matrices in a meaningful way.
+# Unnormalized matrices result in a delicious slice of pizza.
+bitstype 8 CEntry  # has to be a multiple of 8 at the moment
+convert(::Type{CEntry}, x::CEntry) = x
+convert(::Type{CEntry}, x::Number) = box(CEntry, unbox(UInt8, UInt8(x)))
+convert{T<:Number}(::Type{T}, x::CEntry) = T(box(UInt8, unbox(CEntry, x)))
+function show(io::IO, c::CEntry)
+    v = UInt8(c)
+    if v == 0x00
+        print(io, " 0")
+    elseif v == 0x01
+        print(io, " 1")
+    elseif v == 0x02
+        print(io, " 𝒊")
+    elseif v == 0x03
+        print(io, "-𝒊")
+    elseif v == 0x04
+        print(io, "-1")
+    else
+        print(io, " 🍕")
+    end
+end
+
+show{S}(io::IO, ::MIME"text/plain", x::CMatrix{S}) =
+    showarray(io, SMatrix{S,S,CEntry}(x.data), false)
+summary{S}(m::SMatrix{S,S,CEntry}) = "Clifford matrix"
 
 # Our normalization convention is that the first nonzero entry be a 1.  This
 # normalization reconciles the 5-element field and the +1, -1, +i, -i
@@ -46,13 +115,17 @@ typealias CMatrix Matrix{UInt8}
 # NOTE: normalize only produces correct results on matrices already modded by 5.
 function normalize(A::CMatrix)
   normConst = A[findfirst(A)]
-  inverse = normConst $ ((normConst >>> 1) & 1) # Inverse mod 5
-  mod(A*inverse, 5)
+  inverse = normConst $ ((normConst >>> 0x01) & 0x01) # Inverse mod 5
+  mod.(A*inverse, 0x05)
 end
 
 # Implement multiplication such that the matrix product is properly normalized.
-function mult(A::CMatrix, B::CMatrix...)
-  normalize(reduce((B,C) -> mod(B*C, 5), A, B))
+# Note that this function throws an error if called with no arguments, because
+# it cannot infer what dimensions to use.
+function *(A::CMatrix, B::CMatrix...)
+    mult(X::CMatrix, Y::CMatrix) =
+        invoke(*, (StaticMatrix{UInt8}, StaticMatrix{UInt8}), X, Y)
+    normalize(reduce((D,C) -> mod.(mult(D,C), 0x05), eye(A), (A,B...)))
 end
 
 # We also have to modify matrix inversion.  My present choice is to compute the
@@ -60,27 +133,29 @@ end
 # matrix.  Then we normalize.  More direct routes could be taken to get the
 # minors of each element but I feel it would amount to rewriting too much for
 # something not performance-critical.
-function invert(A::CMatrix)
-  normalize(map(x -> UInt8(round(mod(x, 5))), inv(A) * det(A)))
+function inv{S}(A::CMatrix{S})
+    B = SMatrix{S,S,Float64}(A) # avoid problem in StaticArrays.jl
+    normalize(CMatrix{S,S*S}(map(x -> UInt8(round(mod.(x, 0x05))), inv(B) * det(B))))
 end
 
-# Output a clifford matrix corresponding to A on left set of qubits and B on
-# right set of qubits - used for 2-qubit representation of independent 1-qubit
-# gates.
-function outer(A::CMatrix, B::CMatrix)
-  mod(kron(A, B), 5)
+# Output a clifford matrix corresponding to A on qubit 1 and B on qubit 2.
+function kron{S,T}(A::CMatrix{S}, B::CMatrix{T})
+    #TODO: implement kron for StaticArrays in a pull request
+    r = invoke(kron, (StaticMatrix{UInt8}, StaticMatrix{UInt8}), A, B)
+    A = S*T
+    B = A*A
+    CMatrix{A,B}(mod(r, 0x05))
 end
 
 # I'll explicitly write out the x pi/2 and y pi/2 single-qubit matrices, using
 # these to generate the rest.  I will refer to them as f and g, respectively.
-const f = UInt8[1 2; 2 1]
-const g = UInt8[1 4; 1 1]
-const h = mult(g, f, g, g, g) # Gives the z/2 rotation
+const f = CMatrix{2,4}([1 2; 2 1])
+const g = CMatrix{2,4}([1 4; 1 1])
+const h = *(g, f, g, g, g) # Gives the z/2 rotation
 
 # For later use, the 2-qubit matrices cz and swap
-const cz = UInt8[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 4]
-const swap = UInt8[1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1]
-
+const cz = CMatrix{4,16}([1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 4])
+const swap = CMatrix{4,16}([1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1])
 
 # Single qubit clifford group is 24 gates, I'll just do this the long way.
 # In the Mathematica notebook these are shown to correspond 1:1 with the pulses
@@ -90,41 +165,40 @@ const SQClif = CMatrix[eye(f),
                f,
                g,
                h,
-               mult(f, f),
-               mult(g, g),
-               mult(h, h),
-               mult(f, f, f),
-               mult(g, g, g),
-               mult(h, h, h),
-               mult(f, g),
-               mult(f, g, g, g),
-               mult(f, f, f, g),
-               mult(f, f, f, g, g, g),
-               mult(f, h),
-               mult(f, h, h, h),
-               mult(f, f, f, h),
-               mult(f, f, f, h, h, h),
-               mult(f, f, g),
-               mult(f, f, g, g, g),
-               mult(g, g, h),
-               mult(g, g, h, h, h),
-               mult(h, h, f),
-               mult(h, h, f, f, f)]
-
+               *(f, f),
+               *(g, g),
+               *(h, h),
+               *(f, f, f),
+               *(g, g, g),
+               *(h, h, h),
+               *(f, g),
+               *(f, g, g, g),
+               *(f, f, f, g),
+               *(f, f, f, g, g, g),
+               *(f, h),
+               *(f, h, h, h),
+               *(f, f, f, h),
+               *(f, f, f, h, h, h),
+               *(f, f, g),
+               *(f, f, g, g, g),
+               *(g, g, h),
+               *(g, g, h, h, h),
+               *(h, h, f),
+               *(h, h, f, f, f)]
 
 # 2-qubit clifford group can be constructed as a SQClif gate on each qubit,
 # followed by one of the ten operations below, followed by an optional swap.
 # We use only the "easy" half of the clifford group, modding out by swaps.
 const EntanglingGate = CMatrix[eye(cz),
                        cz,
-                       mult(outer(eye(f), f), cz),
-                       mult(outer(eye(f), g), cz),
-                       mult(outer(f, eye(f)), cz),
-                       mult(outer(f, f), cz),
-                       mult(outer(f, g), cz),
-                       mult(outer(g, eye(f)), cz),
-                       mult(outer(g, f), cz),
-                       mult(outer(g, g), cz)]
+                       *(kron(eye(f), f), cz),
+                       *(kron(eye(f), g), cz),
+                       *(kron(f, eye(f)), cz),
+                       *(kron(f, f), cz),
+                       *(kron(f, g), cz),
+                       *(kron(g, eye(f)), cz),
+                       *(kron(g, f), cz),
+                       *(kron(g, g), cz)]
 
 
 #============= Pulses =============#
@@ -297,7 +371,7 @@ end
 # And then the analogous (5760-element) lists and lookup table.  Note that we
 # only employ the WithZ case here, assuming qubits that are coupled need to be
 # Z-tunable.  With a gmon scheme this might not be accurate.
-const TQClif = collect([mult(EntanglingGate[k], outer(SQClif[i], SQClif[j]))
+const TQClif = collect([*(EntanglingGate[k], kron(SQClif[i], SQClif[j]))
           for i=1:24, j=1:24, k=1:10])
 const TQPulse= collect([[pulseOuter(SQPulseWithZ[i], SQPulseWithZ[j]); EntanglingPulse[k]]
           for i=1:24, j=1:24, k=1:10])
@@ -306,7 +380,7 @@ const TQPulse= collect([[pulseOuter(SQPulseWithZ[i], SQPulseWithZ[j]); Entanglin
 # that matrix plus a swap operation.  Since we use this lookup table to reach
 # the ground state, both will work.  We will not be turning error states into
 # clean ones, just switching which qubit fails to read ground state.
-TQLookup = Dict{CMatrix, Pulse}(map(=>, [TQClif map(A->mult(swap, A), TQClif)]
+TQLookup = Dict{CMatrix, Pulse}(map(=>, [TQClif map(A->*(swap, A), TQClif)]
                                       , [TQPulse TQPulse]))
 
 
@@ -330,7 +404,7 @@ TQLookup = Dict{CMatrix, Pulse}(map(=>, [TQClif map(A->mult(swap, A), TQClif)]
 
 function benchmark1Qubit(nClifs, pulseIndex::Int = 1, ZControl::Bool = true)
   selection = rand(1:24, nClifs-1)
-  recovery = invert(mult([SQClif[reverse(selection)]
+  recovery = inv(*([SQClif[reverse(selection)]
                           fill(SQClif[pulseIndex], nClifs-1)]'[:]...))
   if ZControl
     [vcat(SQPulseWithZ[[selection fill(pulseIndex, nClifs-1)]'[:]]...); SQLookupWithZ[recovery]]
@@ -348,7 +422,7 @@ end
 # such, ZControl is assumed true always.
 function benchmark2Qubit(nClifs, pulseIndex::Int = 1)
   selection = rand(1:5760, nClifs-1)
-  recovery = invert(mult([TQClif[reverse(selection)]
+  recovery = inv(*([TQClif[reverse(selection)]
                           fill(TQClif[pulseIndex], nClifs-1)]'[:]...))
   [vcat(TQPulse[[selection fill(pulseIndex, nClifs-1)]'[:]]...); TQLookup[recovery]]
 end

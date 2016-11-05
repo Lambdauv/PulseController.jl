@@ -1,6 +1,7 @@
 module Sequencing
 
 using ..Qubits # Includes Clifford and Waveforms
+
 using InstrumentControl
 using InstrumentControl.AWG5014C
 using Alazar # For readout
@@ -23,7 +24,7 @@ export benchmark2Qubit
 export Pulse
 
 # gateNames has its last use here in naming the AWG pulse - no parents need it
- 
+
 #============================ Basic seqeuncing ================================#
 # The sequencing also has to be different depending on which type
 # of waveform we are using.  In the case of FloatWaveforms, we need to insert
@@ -36,7 +37,7 @@ export Pulse
 # dictionary are up to date, and updates the 10x3 matrix of indices.
 # These map the 10 basic single qubit pulses to their corresponding on-board
 # waveform index.  That means that by calling q.pulseConvert[seq, n], with some
-# sequence generated elsewhere in the code, we get the actual index list for 
+# sequence generated elsewhere in the code, we get the actual index list for
 # sequencing on the nth line.
 function prepForSeq(q::Qubit)
   # Communicate with DAC only if necessary
@@ -83,7 +84,7 @@ end
 # The following functions take pulse sequences in the form produced by the code,
 # and send them to the DACs based on their indices in the DAC memory.  This
 # means that sendSequence(q, [Xpi2, I, Xpi2]) for example, will send XYI, XYQ,
-# and Z pulses according to the prior definitions of these pulses.  
+# and Z pulses according to the prior definitions of these pulses.
 function sendSequence(q::Qubit, sequence::Pulse, readout::Bool=True)
   if size(sequence, 2) == 1
     sendSequence(q, sequence[:], readout)

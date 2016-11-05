@@ -69,7 +69,7 @@ function setindex!(q::Qubit, w::Vector{Float64}, p::Pulse)
     (xyi, xyq) = IQgen(q.IFreq, p, w)
     q.waveforms[p] = ExactWaveform(xyi, xyq, UInt16[], true)
   elseif p[1] < 11 && isa(q, QubitWithZ)
-    q.waveforms[p] = ExactWaveform(UInt16[], UInt16[], 
+    q.waveforms[p] = ExactWaveform(UInt16[], UInt16[],
                     map(x -> UInt16(offsetValue + round(x)), w), true)
   else # Trying to set Z gates on a QubitNoZ object
     println("Warning: no gates set by this operation.")
@@ -116,34 +116,31 @@ end
 
 # A user shouldn't have to specify the matrix or the dictionary to define a
 # qubit.  All that they should have to input is IFreq and the line info.
-# A user can specify "False" for the Z line to generate a QubitNoZ object,
-# or omit it entirely.
 
-# COMPLICATION: The corotating frame of the upper level causes the phase of the
-# true-X and true-Y gates to oscillate over time.  To be able to reuse gates
-# that are defined on the AWG the IFreq must be related to the pulse duration.
-# Some code could be written to compensate for it, but it would leave a lot more
-# pulses defined on the AWG.
-
-# With 250 ns pulses, the IF needs to be an exact multiple of 4MHz.  With 20ns
-# pulses, it will need to be a multiple of 50MHz.  As we have used 100MHz as the
-# IFreq in the past, this is fine.  It just is important to be aware that the
-# restriction exists.
 function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
-                               lineXYQ::Tuple{Instrument,Int},
-               lineZ=false)
-  if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
-    println("WARNING: given IFreq will cause inconsistent phase within "*
-            "consecutive 250ns pulses")
-  end
-  if isa(lineZ, Bool) && !lineZ
+        lineXYQ::Tuple{Instrument,Int})
+    if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
+      println("WARNING: given IFreq will cause inconsistent phase within "*
+              "consecutive 250ns pulses")
+    end
     ret = QubitNoZ(IFreq, lineXYI, lineXYQ, fill(-1, (7,2)), Dict())
-  elseif isa(lineZ, Tuple{Instrument,Int})
-    ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill(-1, (10,3)), Dict())
-  end
-  println("To initialize pulse shapes for this Qubit, please run one of the "*
+    println("To initialize pulse shapes for this Qubit, please run one of the "*
            "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")
-  ret
+    ret
+end
+
+function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
+    lineXYQ::Tuple{Instrument,Int}, lineZ::Tuple{Instrument,Int})
+
+    if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C) ||
+        isa(lineZ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
+      println("WARNING: given IFreq will cause inconsistent phase within "*
+              "consecutive 250ns pulses")
+    end
+    ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill(-1, (10,3)), Dict())
+    println("To initialize pulse shapes for this Qubit, please run one of the "*
+            "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")
+    ret
 end
 
 # Initializing the dictionary shouldn't require manually inputting up to 10

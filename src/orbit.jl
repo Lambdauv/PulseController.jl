@@ -2,6 +2,7 @@ module ORBIT
 
 using ..ParticleSwarm
 using ..Sequencing # Includes Clifford, Waveforms, and Qubit
+using ..Waveforms
 
 # Buckets of Export statements
 
@@ -64,6 +65,7 @@ function optimize(q::Qubit, p::Pulse, numpoints::Integer, init::Sequencing.Qubit
     guess = init.wavedata
   end
 
+  # TODO
   if p[1] < 7 && isa(q.lineXYI[1], InstrumentControl.InsAWG5014C) # XY on AWG
   end
 end
