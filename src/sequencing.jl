@@ -23,6 +23,9 @@ export benchmark1Qubit
 export benchmark2Qubit
 export Pulse
 
+#250 for Hardware Sequencer
+const AWGLENGTH = 50
+
 # gateNames has its last use here in naming the AWG pulse - no parents need it
 
 #============================ Basic seqeuncing ================================#
@@ -42,11 +45,20 @@ export Pulse
 function prepForSeq(q::Qubit)
   # Communicate with DAC only if necessary
   for p in q.waveforms
-    if p[2].dirty
-      q.pulseConvert[p[1],1] = pushWaveform(p[2].XYI, q.lineXYI[1], gateNames[p[1]]*"I")
-      q.pulseConvert[p[1],2] = pushWaveform(p[2].XYQ, q.lineXYQ[1], gateNames[p[1]]*"Q")
+    idx = p[1][1]
+    if p[2].undefined
+      write(q.lineXYI[1], "WLIST:WAV:NEW "*quoted(gateNames[idx]*"I")*", "*string(AWGLENGTH)*", INTEGER")
+      write(q.lineXYQ[1], "WLIST:WAV:NEW "*quoted(gateNames[idx]*"Q")*", "*string(AWGLENGTH)*", INTEGER")
       if isa(q, QubitWithZ)
-        q.pulseConvert[p[1],3] = pushWaveform(p[2].Z, q.lineZ[1], gateNames[p[1]])
+        write(q.lineZ[1], "WLIST:WAV:NEW "*quoted(gateNames[idx])*", "*string(AWGLENGTH)*", INTEGER")
+      end
+      p[2].undefined = false
+    end
+    if p[2].dirty
+      q.pulseConvert[idx,1] = pushWaveform(p[2].XYI, q.lineXYI[1], gateNames[idx]*"I")
+      q.pulseConvert[idx,2] = pushWaveform(p[2].XYQ, q.lineXYQ[1], gateNames[idx]*"Q")
+      if isa(q, QubitWithZ)
+        q.pulseConvert[idx,3] = pushWaveform(p[2].Z, q.lineZ[1], gateNames[idx])
       end
       p[2].dirty = false
     end
@@ -55,11 +67,11 @@ end
 
 # Return the label of the waveform in memory
 function pushWaveform(wavedata::Vector{UInt16}, board::Instrument, name="")
-  if length(wavedata) == 0
+  #if length(wavedata) == 0
     # This is one of the off channels of a FloatWaveform.  Just return the
     # stored index of idle pulse
-    return idles[board]
-  end
+    #return idles[board]
+  #end
   if isa(board, InsAWG5014C)
     return awgPush(wavedata, board, name)
   else
@@ -72,11 +84,12 @@ end
 # will then have 220 points of offsetValue and then 30 points with signal.
 import InstrumentControl.AWG5014C: offsetValue
 function awgPush(wavedata::Vector{UInt16}, ins::InsAWG5014C, name::String)
-  if length(wavedata) > 250
+  if length(wavedata) > AWGLENGTH
     error("Waveforms longer than 250 points not presently supported.")
   else
-    binblockwrite(ins, "WLIST:WAV:DATA "*name*", "*reinterpret(UInt8,
-      [fill(offsetValue, 250 - length(wavedata)); map(htol, wavedata)]))
+    header = *("WLIST:WAV:DATA ", quoted(name), ",")
+    binblockwrite(ins, header, reinterpret(UInt8,
+      htol.([fill(offsetValue, AWGLENGTH - length(wavedata)); wavedata])))
   end
   name # Return the name, how the AWG will refer to it later.
 end
@@ -85,7 +98,7 @@ end
 # and send them to the DACs based on their indices in the DAC memory.  This
 # means that sendSequence(q, [Xpi2, I, Xpi2]) for example, will send XYI, XYQ,
 # and Z pulses according to the prior definitions of these pulses.
-function sendSequence(q::Qubit, sequence::Pulse, readout::Bool=True)
+function sendSequence(q::Qubit, sequence::Pulse, readout::Bool=true)
   if size(sequence, 2) == 1
     sendSequence(q, sequence[:], readout)
   else
@@ -94,7 +107,7 @@ function sendSequence(q::Qubit, sequence::Pulse, readout::Bool=True)
 end
 
 
-function sendSequence(q::Qubit, sequence::Vector{Int8}, readout::Bool=True)
+function sendSequence(q::Qubit, sequence::Vector{Int8}, readout::Bool=true)
   # Make sure we aren't going to send obsolete pulses
   # (no writes done if everything is current)
   prepForSeq(q)
@@ -105,21 +118,32 @@ function sendSequence(q::Qubit, sequence::Vector{Int8}, readout::Bool=True)
   # perform a readout pulse.  This allows the sequencing to be done in one
   # (albeit large) command to the AWG.  If this isn't the goal, bug Brett.
   # Someday readout will be a single pulse for multiple qubits.
-  len = "SEQ:LENG "*string(length(sequence))*"\n"
+  ins = q.lineXYI[1]
+  len = "SEQ:LENG "*string(length(sequence) + readout ? 1 : 0)*"\n"
+
+  write(ins, len)
+
   istring = map((x,y)-> "SEQ:ELEM"*string(x)*":WAV"*string(q.lineXYI[2])*
                                                     " \""*string(y)*"\"\n",
-                                1:length(sequence), q.pulseConvert[sequence, 1])
+                            1:length(sequence), q.pulseConvert[sequence, 1])[:]
   qstring = map((x,y)-> "SEQ:ELEM"*string(x)*":WAV"*string(q.lineXYQ[2])*
                                                     " \""*string(y)*"\"\n",
-                                1:length(sequence), q.pulseConvert[sequence, 2])
+                            1:length(sequence), q.pulseConvert[sequence, 2])[:]
+  write(ins, *(istring...))
+  write(ins, *(qstring...))
   # Get the other channels, which are IQ for readout, and instruct them to be
   # idle at this time
   a = 1:4
   a = a[(a.!=q.lineXYI[2])&(a.!=q.lineXYQ[2])] # Select channels not used by XY
-  idle1 = map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[1])*" \"I\"\n")
-  idle2 = map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[1])*" \"I\"\n")
+  idle1 = map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[1])*" \"Idle\"\n", 1:length(sequence))
+  idle2 = map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[2])*" \"Idle\"\n", 1:length(sequence))
   # Put it all together and send to the AWG
-  println(*(len, istring..., qstring..., idle1..., idle2...))
+  write(ins, *(idle1...))
+  write(ins, *(idle2...))
+
+  # Readout via a defined readout pulse
+  if readout
+    write("SEQ:ELEM"
 end
 #=
 function sendSequence(q::Qubit, sequence::Vector{Int8})

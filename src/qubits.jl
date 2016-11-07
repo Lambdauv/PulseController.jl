@@ -1,10 +1,15 @@
 module Qubits
 
 using ..Clifford
+import ..Clifford: Idle, Xpi, Xpi2, X3pi2, Ypi, Ypi2, Y3pi2, Zpi, Zpi2, Z3pi2, CZ
 using ..Waveforms
 using InstrumentControl
+import InstrumentControl.Instrument
+import InstrumentControl.AWG5014C.InsAWG5014C
 
 export Qubit
+export QubitWithZ
+export QubitNoZ
 export cosInit
 export gaussInit
 export generalInit
@@ -59,18 +64,19 @@ end
 # values to ExactWaveform.  An explicit convert method cannot be written, since
 # the ExactWaveform produced depends on the Pulse and on the IFreq of the qubit.
 import Base.setindex!
+import InstrumentControl.AWG5014C: offsetValue
 function setindex!(q::Qubit, w::Vector{Float64}, p::Pulse)
   if p[1] == 7
-    q.waveforms[p] = ExactWaveform(UInt16[], UInt16[], UInt16[], true)
+    q.waveforms[p] = ExactWaveform(UInt16[], UInt16[], UInt16[], true, true)
   elseif length(w) != floatIdleLength
       error("FloatWaveform pulses must contain exactly "*
                                  string(floatIdleLength)*" points")
   elseif p[1] < 7
     (xyi, xyq) = IQgen(q.IFreq, p, w)
-    q.waveforms[p] = ExactWaveform(xyi, xyq, UInt16[], true)
+    q.waveforms[p] = ExactWaveform(xyi, xyq, UInt16[], true, true)
   elseif p[1] < 11 && isa(q, QubitWithZ)
     q.waveforms[p] = ExactWaveform(UInt16[], UInt16[],
-                    map(x -> UInt16(offsetValue + round(x)), w), true)
+                    map(x -> UInt16(offsetValue + round(x)), w), true, true)
   else # Trying to set Z gates on a QubitNoZ object
     println("Warning: no gates set by this operation.")
   end
@@ -83,7 +89,7 @@ function IQgen(IFreq::Float64, pulse::Pulse, window::Vector{Float64})
     error("Not a pulse in need of IQ mixing")
   else
     phase = im ^ pulse[1]
-    helix = phase * [exp(im * 2π * IFreq * p / sampleRate) * window[p]
+    helix = phase * [exp(im * 2π * IFreq * p / 1e9) * window[p]
                                   for p in 1:length(window)]
     waveformI = map(z->UInt16(offsetValue + round(real(z))), helix)
     waveformQ = map(z->UInt16(offsetValue + round(imag(z))), helix)
@@ -123,7 +129,7 @@ function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
       println("WARNING: given IFreq will cause inconsistent phase within "*
               "consecutive 250ns pulses")
     end
-    ret = QubitNoZ(IFreq, lineXYI, lineXYQ, fill(-1, (7,2)), Dict())
+    ret = QubitNoZ(IFreq, lineXYI, lineXYQ, fill("-1", (7,2)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
            "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")
     ret
@@ -133,11 +139,11 @@ function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
     lineXYQ::Tuple{Instrument,Int}, lineZ::Tuple{Instrument,Int})
 
     if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C) ||
-        isa(lineZ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
+        isa(lineZ[1], InsAWG5014C)) && (IFreq % (1e9/AWGLENGTH) != 0)
       println("WARNING: given IFreq will cause inconsistent phase within "*
               "consecutive 250ns pulses")
     end
-    ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill(-1, (10,3)), Dict())
+    ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill("-1", (10,3)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
             "init routines:\n\tgaussInit\n\tcosInit\n\tgeneralInit")
     ret
@@ -165,7 +171,7 @@ function gaussInit(q::Qubit, amplitude, sigma, XY::Bool = true, Z::Bool = true)
 end
 
 function cosInit(q::Qubit, amplitude, XY::Bool = true, Z::Bool = true)
-  pulseShape = [amplitude*(1-cos(x/floatIdleLength)/2)
+  pulseShape = [amplitude*(1-cos(2π*x/floatIdleLength))/2
                                 for x in 1:floatIdleLength]
   generalInit(q, pulseShape, XY, Z)
 end
@@ -180,9 +186,10 @@ function generalInit(q::Qubit, pulseShape, XY::Bool = true, Z::Bool = true)
     q[Zpi2] = pulseShape/2
     q[Z3pi2] = -pulseShape/2
   end
-  if q.pulseConvert[7] == -1
-    q[I] = [0.0]
+  if q.pulseConvert[7] == "-1"
+    q[Idle] = [0.0 for _ in 1:floatIdleLength]
   end
+  return "Initialization successful"
 end
 
 end # End module Qubit

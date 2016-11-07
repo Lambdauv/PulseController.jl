@@ -60,6 +60,7 @@ type ExactWaveform <: Waveform
   XYI::Vector{UInt16}
   XYQ::Vector{UInt16}
   Z::Vector{UInt16}
+  undefined::Bool # Denotes whether the AWG has this waveform defined at all
   dirty::Bool # Denotes whether this is up to date with the DAC's memory
 
   # Provide an inner constructor.  There are two options for an ExactWaveform.
