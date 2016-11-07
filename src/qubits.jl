@@ -14,6 +14,8 @@ export cosInit
 export gaussInit
 export generalInit
 
+export Readout
+
 # From Clifford
 export benchmark1Qubit
 export benchmark2Qubit
@@ -190,6 +192,26 @@ function generalInit(q::Qubit, pulseShape, XY::Bool = true, Z::Bool = true)
     q[Idle] = [0.0 for _ in 1:floatIdleLength]
   end
   return "Initialization successful"
+end
+
+# We also define a Readout object similar to the Qubit object, which makes
+# the sequencing a bit cleaner.  It holds just the readout pulse, which
+# consists of a rectangle windowed IF tone and a long wait.
+type Readout
+  lineXYI::Tuple{Instrument,Int}
+  lineXYQ::Tuple{Instrument,Int}
+  ROWaveform::ExactWaveform
+  ROIdle::ExactWaveform
+end
+
+# Given a window length in samples, and an optional delay length in samples,
+# construct the readout pulse.
+function Readout(IFreq, lineXYI::Tuple{Instrument,Int},
+                        lineXYQ::Tuple{Instrument,Int},
+                        window::Int, delay=1e5)
+  RO = ExactWaveform(IQgen(IFreq, Xpi, [fill(8191, window); zeros(delay)])..., UInt16[], true, true)
+  ROIdle = ExactWaveform(fill(offsetValue, window+delay), UInt16[], UInt16[], true, true)
+  Readout(lineXYI, lineXYQ, RO, ROIdle)
 end
 
 end # End module Qubit
