@@ -10,6 +10,7 @@ export sendSequence
 
 # From qubits
 export Qubit
+export Readout
 export cosInit
 export gaussInit
 export generalInit
@@ -24,7 +25,7 @@ export benchmark2Qubit
 export Pulse
 
 #250 for Hardware Sequencer
-const AWGLENGTH = 50
+const AWGLENGTH = 80
 
 # gateNames has its last use here in naming the AWG pulse - no parents need it
 
@@ -67,16 +68,16 @@ end
 
 function prepForRO(r::Readout)
   if r.ROIdle.undefined
-    write(r.lineXYI[1], "WLIST:WAV:NEW \"ROIdle\", "*string(length(r.ROIdle.XYI)))*", INTEGER")
+    write(r.lineXYI[1], "WLIST:WAV:NEW \"ROIdle\", "*string(length(r.ROIdle.XYI))*", INTEGER")
     r.ROIdle.undefined = false
   end
   if r.ROWaveform.undefined
-    write(r.lineXYI[1], "WLIST:WAV:NEW \"ROI\", "*string(length(r.ROIdle.XYI)))*", INTEGER")
-    write(r.lineXYQ[1], "WLIST:WAV:NEW \"ROQ\", "*string(length(r.ROIdle.XYI)))*", INTEGER")
+    write(r.lineXYI[1], "WLIST:WAV:NEW \"ROI\", "*string(length(r.ROIdle.XYI))*", INTEGER")
+    write(r.lineXYQ[1], "WLIST:WAV:NEW \"ROQ\", "*string(length(r.ROIdle.XYI))*", INTEGER")
     r.ROWaveform.undefined = false
   end
   if r.ROIdle.dirty
-    pushWaveform(ROIdle.XYI, r.lineXYI[1], "ROIdle")
+    pushWaveform(r.ROIdle.XYI, r.lineXYI[1], "ROIdle")
     r.ROIdle.dirty = false
   end
   if r.ROWaveform.dirty
@@ -106,8 +107,13 @@ end
 import InstrumentControl.AWG5014C: offsetValue
 function awgPush(wavedata::Vector{UInt16}, ins::InsAWG5014C, name::String)
   header = *("WLIST:WAV:DATA ", quoted(name), ",")
-  binblockwrite(ins, header, reinterpret(UInt8,
-      htol.([fill(offsetValue, AWGLENGTH - length(wavedata)); wavedata])))
+  if length(wavedata) < AWGLENGTH
+    binblockwrite(ins, header, reinterpret(UInt8,
+        htol.([fill(offsetValue, AWGLENGTH - length(wavedata)); wavedata])))
+  else
+    binblockwrite(ins, header, reinterpret(UInt8,
+        htol.(wavedata)))
+  end
   name # Return the name, how the AWG will refer to it later.
 end
 
@@ -136,7 +142,7 @@ function sendSequence(q::Qubit, sequence::Vector{Int8})
   # (albeit large) command to the AWG.  If this isn't the goal, bug Brett.
   # Someday readout will be a single pulse for multiple qubits.
   ins = q.lineXYI[1]
-  mess = "SEQ:LENG "*string(length(sequence))*"\n"
+  mess = "AWGC:RMOD SEQ\nSEQ:LENG 0\nSEQ:LENG "*string(length(sequence))*"\n"
 
   mess *= map((x,y)-> "SEQ:ELEM"*string(x)*":WAV"*string(q.lineXYI[2])*
                                                     " \""*string(y)*"\"\n",
@@ -147,10 +153,14 @@ function sendSequence(q::Qubit, sequence::Vector{Int8})
   # Get the other channels and instruct them to be idle at this time
   a = 1:4
   a = a[(a.!=q.lineXYI[2])&(a.!=q.lineXYQ[2])] # Select channels not used by XY
-  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[1])*" \"Idle\"\n", 1:length(sequence))...
-  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[2])*" \"Idle\"\n", 1:length(sequence))...
+  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[1])*" \"IdleI\"\n", 1:length(sequence))...
+  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(a[2])*" \"IdleQ\"\n", 1:length(sequence))...
   # Put it all together and send to the AWG, and turn on output
   write(ins, mess)
+  println(errors(ins))
+  ins[SequenceGOTOTarget,1] = 1
+  ins[SequenceGOTOState, length(sequence)] = true
+  ins[SequenceWaitTrigger,1] = true
   @allch ins[ChannelOutput] = true
   ins[Output] = true
 end
@@ -176,7 +186,7 @@ function sendSequence(q::Qubit, sequence::Vector{Int8}, r::Readout)
   # (albeit large) command to the AWG.  If this isn't the goal, bug Brett.
   # Someday readout will be a single pulse for multiple qubits.
   ins = q.lineXYI[1]
-  mess = "SEQ:LENG "*string(length(sequence) + 1)*"\n"
+  mess = "AWGC:RMOD SEQ\nSEQ:LENG 0\nSEQ:LENG "*string(length(sequence) + 1)*"\n"
 
   mess *= map((x,y)-> "SEQ:ELEM"*string(x)*":WAV"*string(q.lineXYI[2])*
                                                     " \""*string(y)*"\"\n",
@@ -185,8 +195,8 @@ function sendSequence(q::Qubit, sequence::Vector{Int8}, r::Readout)
                                                     " \""*string(y)*"\"\n",
                             1:length(sequence), q.pulseConvert[sequence, 2])[:]...
   # Instruct readout channels to idle
-  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYI[2])*" \"Idle\"\n", 1:length(sequence))...
-  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYQ[2])*" \"Idle\"\n", 1:length(sequence))...
+  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYI[2])*" \"IdleI\"\n", 1:length(sequence))...
+  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYQ[2])*" \"IdleQ\"\n", 1:length(sequence))...
 
   # Readout via a defined readout pulse
   mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(q.lineXYI[2])*" \"ROIdle\"\n"
@@ -195,7 +205,10 @@ function sendSequence(q::Qubit, sequence::Vector{Int8}, r::Readout)
   mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(r.lineXYQ[2])*" \"ROQ\"\n"
 
   write(ins, mess)
-
+  #println(errors(ins))
+  ins[SequenceGOTOTarget,1] = 1
+  ins[SequenceGOTOState, length(sequence) + 1] = true
+  ins[SequenceWaitTrigger,1] = true
   @allch ins[ChannelOutput] = true
   ins[Output] = true
 end

@@ -68,17 +68,22 @@ end
 import Base.setindex!
 import InstrumentControl.AWG5014C: offsetValue
 function setindex!(q::Qubit, w::Vector{Float64}, p::Pulse)
+  if p in keys(q.waveforms)
+    undef = q.waveforms[p].undefined
+  else
+    undef = true
+  end
   if p[1] == 7
-    q.waveforms[p] = ExactWaveform(UInt16[], UInt16[], UInt16[], true, true)
+    q.waveforms[p] = ExactWaveform(UInt16[], UInt16[], UInt16[], undef, true)
   elseif length(w) != floatIdleLength
       error("FloatWaveform pulses must contain exactly "*
                                  string(floatIdleLength)*" points")
   elseif p[1] < 7
     (xyi, xyq) = IQgen(q.IFreq, p, w)
-    q.waveforms[p] = ExactWaveform(xyi, xyq, UInt16[], true, true)
+    q.waveforms[p] = ExactWaveform(xyi, xyq, UInt16[], undef, true)
   elseif p[1] < 11 && isa(q, QubitWithZ)
     q.waveforms[p] = ExactWaveform(UInt16[], UInt16[],
-                    map(x -> UInt16(offsetValue + round(x)), w), true, true)
+                    map(x -> UInt16(offsetValue + round(x)), w), undef, true)
   else # Trying to set Z gates on a QubitNoZ object
     println("Warning: no gates set by this operation.")
   end
@@ -208,8 +213,12 @@ end
 # construct the readout pulse.
 function Readout(IFreq, lineXYI::Tuple{Instrument,Int},
                         lineXYQ::Tuple{Instrument,Int},
-                        window::Int, delay=1e5)
-  RO = ExactWaveform(IQgen(IFreq, Xpi, [fill(8191, window); zeros(delay)])..., UInt16[], true, true)
+                        window::Int, delay=100000)
+  roi, roq = IQgen(IFreq, Xpi, [fill(8191, window); zeros(delay)])
+  # Set markers for readout
+  roi[1:100] |= 0xc000
+  roq[1:100] |= 0xc000
+  RO = ExactWaveform(roi, roq, UInt16[], true, true)
   ROIdle = ExactWaveform(fill(offsetValue, window+delay), UInt16[], UInt16[], true, true)
   Readout(lineXYI, lineXYQ, RO, ROIdle)
 end

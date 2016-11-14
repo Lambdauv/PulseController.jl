@@ -11,6 +11,7 @@ export sendSequence
 
 # From qubits
 export Qubit
+export Readout
 export cosInit
 export gaussInit
 export generalInit

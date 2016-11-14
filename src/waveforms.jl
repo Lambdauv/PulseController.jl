@@ -48,7 +48,7 @@ export FloatWaveform
 export ExactWaveform
 export floatIdleLength
 
-const floatIdleLength = 30
+const floatIdleLength = 72
 
 abstract Waveform
 

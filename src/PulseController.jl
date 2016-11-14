@@ -30,7 +30,8 @@ import .Clifford: Idle, Xpi, Xpi2, X3pi2, Ypi, Ypi2, Y3pi2, Zpi, Zpi2, Z3pi2, CZ
 export Idle, Xpi, Xpi2, X3pi2, Ypi, Ypi2, Y3pi2, Zpi, Zpi2, Z3pi2, CZ
 
 # From qubits
-import .Qubits: Qubit, cosInit, gaussInit, generalInit
+import .Qubits: Qubit, cosInit, gaussInit, generalInit, Readout
+export Readout
 export Qubit
 export cosInit
 export gaussInit
