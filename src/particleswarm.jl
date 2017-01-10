@@ -13,6 +13,7 @@
 # Generic algorithm and PSO are both options - PSO was better at fine-tuning)
 
 module ParticleSwarm
+export PSO
 
 type Particle{T<:Vector}
   position::T
@@ -32,7 +33,8 @@ Base.isless(x::Particle, y::Particle) = x.currentFitness < y.currentFitness
 
 # Helper to generate <amount> random numbers between two bounds.  Only uses
 # Float64 precision but that should be enough for us.
-randBetween(min, max, amount=1) = min + (max - min)*rand(amount)
+randBetween(min::Float64, max::Float64, amount=1) = min + (max - min)*rand(amount)
+randBetween(min::Integer, max::Integer, amount=1) = rand(min:max, amount)
 
 # The simplest arguments to a generic PSO function are the population size, the
 # fitness function, and the bounds on the parameters.  As solution candidates
@@ -59,13 +61,14 @@ function PSO{T<:Real}(
           selfWeight=1, neighborWeight=1,
           candidate::Vector{T}=randBetween.(boundsMin, boundsMax))
 
-  popSize = (popSize > 0) ? popSize : 5*length(boundsMin)
+  popSize = (popSize > 0) ? popSize : 3*length(boundsMin)
   neighborhoodMin = (neighborhoodMin > 0) ? neighborhoodMin : div(popSize, 10)
 
   # Initialize a pool of "Popsize" Particles, with each element in the bounds
-  pinit = hcat(candidate, randBetween.(boundsMin, boundsMax, popSize-1)...)'
-  vinit = hcat(randBetween.(boundsMin-boundsMax, boundsMax-boundsMin, popSize)...)'
-  populationInfo = [Particle(pinit[:,i], fitness(pinit[:,i]), vinit[:,i])
+  pinit = [candidate'; hcat(randBetween.(boundsMin, boundsMax, popSize-1)...)]
+  vinit = hcat(randBetween.(boundsMin-boundsMax, boundsMax-boundsMin, popSize)...)
+  finit = fitness([pinit[i,:] for i in 1:popSize])
+  populationInfo = [Particle(pinit[i,:], finit[i], vinit[i,:])
                     for i in 1:popSize]
   winner = findmax(populationInfo)[1]
 
@@ -79,48 +82,52 @@ function PSO{T<:Real}(
   # An iteration.
   while(iters < maxIterations && stallCounter < 100)
     improvementFlag = false
-  
+
     # For each element find a subset of length N not including
     # the element itself and identify the winner.
     neighborhoods = [map(x -> x + Int(x >= i), randperm(popSize-1)[1:N])
                       for i in 1:popSize]
     localWinners = map(n -> findmax(populationInfo[n])[1], neighborhoods)
-  
+
     # New velocities are a weighted sum of old velocity, distance to local
     # winner and distance from personal best
-    map((x,y) -> x.velocity = W*x.velocity +
+    map((x,y) -> x.velocity = round.(W*x.velocity +
            selfWeight*rand(length(x.position)).*(x.bestPosition - x.position)
          + neighborWeight*rand(length(x.position)).*(y.position - x.position)
-         , populationInfo, localWinners)
-  
+         , populationInfo, localWinners))
+
     # Update the positions based on these new velocities (can you tell I prefer
     # functional programming?). We clip it to the proper range.
-    map(x -> x.position = map((p,lo,hi) -> (lo + hi + abs(p-lo) - abs(p-hi))/2,
+    map(x -> x.position = map((p,lo,hi) -> div(lo + hi + abs(p-lo) - abs(p-hi),2),
         x.position + x.velocity, boundsMin, boundsMax), populationInfo)
-  
+
     # Update the current fitness.  If it is better than the old fitness, save
     # current position.  If it is the best seen so far, udpate best fitness.
-    for x in populationInfo
-        x.currentFitness = fitness(x.position)
+    # Because we have a noisy signal, we also re-check the fitness of our
+    # global best, and for better or worse assume the new value.
+    fitnesses = fitness([[winnerX]; (x->x.position).(populationInfo)])
+    maxF, ind = findmax(fitnesses)
+    improvementFlag = (ind > 1)
+    winnerF = maxF
+    for n in 1:popSize
+        x = populationInfo[n]
+        x.currentFitness = fitnesses[n + 1]
         if (x.currentFitness > x.bestFitness)
           x.bestPosition = x.position
           x.bestFitness = x.currentFitness
         end
-        if (x.currentFitness > winnerF)
-          winnerX, winnerF = x.position, x.currentFitness
-          improvementFlag = true
-        end
     end
-  
+
     # Update PSO variables depending on state
     if improvementFlag
+      winnerX = populationInfo[ind - 1].position
       stallCounter = max(0, stallCounter-1)
       N = neighborhoodMin
     else
         stallCounter += 1
       N = min(N + neighborhoodMin, popSize - 1)
     end
-  
+
     if stallCounter < 2
       W = min(2*W, inertiaMax)
     elseif stallCounter > 5
@@ -129,10 +136,13 @@ function PSO{T<:Real}(
 
   # Debug output
   println(iters)
-  println(winnerF)
+  poolF, poolInd = findmax(fitnesses[2:(1+popSize)])
+  println("Highest fitness this generation: "*string(poolF)*" by member "*string(poolInd - 1))
+  println("Global optimum is "*string(winnerF)*" by parameters "*string(winnerX))
+
 
   iters += 1
-  end # End loop 
+  end # End loop
 
   # Return our best found position and its fitness score
   winnerX, winnerF

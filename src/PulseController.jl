@@ -21,8 +21,13 @@ include("sequencing.jl")
 include("particleswarm.jl")
 include("orbit.jl")
 
-import .Sequencing: sendSequence
+import .Sequencing: sendSequence, sendNormalSequence
 export sendSequence
+export sendNormalSequence
+
+import .ORBIT: tuneGate, zeroProb
+export tuneGate
+export zeroProb
 
 # For writing out sequences, we will provide all of the pulse names.  Hopefully
 # having these in scope doesn't clash with user variables

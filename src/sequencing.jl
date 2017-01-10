@@ -4,12 +4,14 @@ using ..Qubits # Includes Clifford and Waveforms
 
 using InstrumentControl
 using InstrumentControl.AWG5014C
-using Alazar # For readout
 
 export sendSequence
+export sendNormalSequence
 
 # From qubits
 export Qubit
+export QubitWithZ
+export QubitNoZ
 export Readout
 export cosInit
 export gaussInit
@@ -25,7 +27,8 @@ export benchmark2Qubit
 export Pulse
 
 #250 for Hardware Sequencer
-const AWGLENGTH = 80
+const NORMSEQLENGTH = 400
+lastSeqNormal = false
 
 # gateNames has its last use here in naming the AWG pulse - no parents need it
 
@@ -108,8 +111,9 @@ import InstrumentControl.AWG5014C: offsetValue
 function awgPush(wavedata::Vector{UInt16}, ins::InsAWG5014C, name::String)
   header = *("WLIST:WAV:DATA ", quoted(name), ",")
   if length(wavedata) < AWGLENGTH
+    pad = div(AWGLENGTH - length(wavedata), 2)
     binblockwrite(ins, header, reinterpret(UInt8,
-        htol.([fill(offsetValue, AWGLENGTH - length(wavedata)); wavedata])))
+        htol.([fill(offsetValue, AWGLENGTH - length(wavedata) - pad); wavedata; fill(offsetValue, pad)])))
   else
     binblockwrite(ins, header, reinterpret(UInt8,
         htol.(wavedata)))
@@ -173,9 +177,13 @@ function sendSequence(q::Qubit, sequence::Pulse, r::Readout)
     error("Please specify only one sequence\n")
   end
 end
-function sendSequence(q::Qubit, sequence::Vector{Int8}, r::Readout)
+
+# The flag segnifies whether to make the assumptions in the function below this.
+function sendSequence(q::Qubit, sequence::Vector{Int8}, r::Readout, flag::Bool = false)
   # Make sure we aren't going to send obsolete pulses
   # (no writes done if everything is current)
+  ins = q.lineXYI[1]
+  ins[Output] = false
   prepForSeq(q)
   prepForRO(r)
 
@@ -185,8 +193,7 @@ function sendSequence(q::Qubit, sequence::Vector{Int8}, r::Readout)
   # perform a readout pulse.  This allows the sequencing to be done in one
   # (albeit large) command to the AWG.  If this isn't the goal, bug Brett.
   # Someday readout will be a single pulse for multiple qubits.
-  ins = q.lineXYI[1]
-  mess = "AWGC:RMOD SEQ\nSEQ:LENG 0\nSEQ:LENG "*string(length(sequence) + 1)*"\n"
+  mess = flag ? "" : "AWGC:RMOD SEQ\nSEQ:LENG 0\nSEQ:LENG "*string(length(sequence) + 1)*"\n"
 
   mess *= map((x,y)-> "SEQ:ELEM"*string(x)*":WAV"*string(q.lineXYI[2])*
                                                     " \""*string(y)*"\"\n",
@@ -195,24 +202,48 @@ function sendSequence(q::Qubit, sequence::Vector{Int8}, r::Readout)
                                                     " \""*string(y)*"\"\n",
                             1:length(sequence), q.pulseConvert[sequence, 2])[:]...
   # Instruct readout channels to idle
-  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYI[2])*" \"IdleI\"\n", 1:length(sequence))...
-  mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYQ[2])*" \"IdleQ\"\n", 1:length(sequence))...
+  if !flag
+      mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYI[2])*" \"IdleI\"\n", 1:length(sequence))...
+      mess *= map(x -> "SEQ:ELEM"*string(x)*":WAV"*string(r.lineXYQ[2])*" \"IdleQ\"\n", 1:length(sequence))...
 
-  # Readout via a defined readout pulse
-  mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(q.lineXYI[2])*" \"ROIdle\"\n"
-  mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(q.lineXYQ[2])*" \"ROIdle\"\n"
-  mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(r.lineXYI[2])*" \"ROI\"\n"
-  mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(r.lineXYQ[2])*" \"ROQ\"\n"
+      # Readout via a defined readout pulse
+      mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(q.lineXYI[2])*" \"ROIdle\"\n"
+      mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(q.lineXYQ[2])*" \"ROIdle\"\n"
+      mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(r.lineXYI[2])*" \"ROI\"\n"
+      mess *= "SEQ:ELEM"*string(length(sequence)+1)*":WAV"*string(r.lineXYQ[2])*" \"ROQ\"\n"
 
+      # Ensure gotos and triggers are correct
+      mess *= "SEQ:ELEM"*string(length(sequence)+1)*":GOTO:STAT 1\n"
+      mess *= "SEQ:ELEM"*string(length(sequence)+1)*":GOTO:IND 1\n"
+      mess *= "SEQ:ELEM1:TWA 1\n"
+      global lastSeqNormal
+      lastSeqNormal = false # overwritten later if the sequence is normal
+  end
   write(ins, mess)
-  #println(errors(ins))
-  ins[SequenceGOTOTarget,1] = 1
-  ins[SequenceGOTOState, length(sequence) + 1] = true
-  ins[SequenceWaitTrigger,1] = true
   @allch ins[ChannelOutput] = true
   ins[Output] = true
 end
 
+# AWG-friendly sequencer that makes sequences all have a standard form.
+# Sequences are assumed to have NORMSEQLENGTH + 1 elements, NORMSEQLENGTH of
+# which are length-AWGLENGTH pulses, and the final a ~1e5 point readout.  The
+# plus side is that the readout never needs to be changed between sequence
+# definitions, nor do the gotos.  Sequences shorter than NORMSEQLENGTH gates
+# (excluding readout) are front padded with idles.
+import ..Clifford: Idle
+function sendNormalSequence(q::Qubit, sequence::Pulse, r::Readout)
+    assert(length(sequence) < 1 + NORMSEQLENGTH)
+    nseq = [Idle*(NORMSEQLENGTH-length(sequence)); sequence]
+    global lastSeqNormal # cache the state of the sequencer
+    sendSequence(q, nseq[:], r, lastSeqNormal)
+    lastSeqNormal = true
+end
+
+function sendMultiROSequence(q::Qubit, sequences::Vector{Pulse}, r::Readout)
+    ins = q.lineXYI[1]
+    ins[Output] = false
+    prepForSeq(q)
+    prepForRO(r)
 
 
 #=

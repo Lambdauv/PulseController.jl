@@ -404,14 +404,27 @@ TQLookup = Dict{CMatrix, Pulse}(map(=>, [TQClif map(A->*(swap, A), TQClif)]
 
 function benchmark1Qubit(nClifs, pulseIndex::Int = 1, ZControl::Bool = true)
   selection = rand(1:24, nClifs-1)
-  recovery = inv(*([SQClif[reverse(selection)]
-                          fill(SQClif[pulseIndex], nClifs-1)]'[:]...))
+  recovery = inv(*([fill(SQClif[pulseIndex], (1,nClifs-1));
+                     SQClif[reverse(selection)']][:]...))
   if ZControl
     [vcat(SQPulseWithZ[[selection fill(pulseIndex, nClifs-1)]'[:]]...); SQLookupWithZ[recovery]]
   else
     [vcat(SQPulseNoZ[[selection fill(pulseIndex, nClifs-1)]'[:]]...); SQLookupNoZ[recovery]]
   end
 end
+
+# A deterministic selection is specified for debugging
+function altbenchmark1Qubit(nClifs, selection, pulseIndex::Int = 1, ZControl::Bool = true)
+    recovery = inv(*([fill(SQClif[pulseIndex], (1,nClifs-1));
+                       SQClif[reverse(selection)']][:]...))
+    if ZControl
+      [vcat(SQPulseWithZ[[selection fill(pulseIndex, nClifs-1)]'[:]]...); SQLookupWithZ[recovery]]
+    else
+      [vcat(SQPulseNoZ[[selection fill(pulseIndex, nClifs-1)]'[:]]...); SQLookupNoZ[recovery]]
+    end
+  end
+
+
 # Convenience method allowing ommitted index but specified ZControl status
 function benchmark1Qubit(nclifs, ZControl::Bool, pulseIndex::Int = 1)
   benchmark1Qubit(nclifs, pulseIndex, ZControl)

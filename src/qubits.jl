@@ -3,6 +3,7 @@ module Qubits
 using ..Clifford
 import ..Clifford: Idle, Xpi, Xpi2, X3pi2, Ypi, Ypi2, Y3pi2, Zpi, Zpi2, Z3pi2, CZ
 using ..Waveforms
+import ..Waveforms: AWGLENGTH
 using InstrumentControl
 import InstrumentControl.Instrument
 import InstrumentControl.AWG5014C.InsAWG5014C
@@ -13,6 +14,7 @@ export QubitNoZ
 export cosInit
 export gaussInit
 export generalInit
+export AWGLENGTH
 
 export Readout
 
@@ -132,9 +134,9 @@ end
 
 function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
         lineXYQ::Tuple{Instrument,Int})
-    if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C)) && (IFreq % 4e6 != 0)
+    if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C)) && (IFreq * AWGLENGTH % 1e9) != 0
       println("WARNING: given IFreq will cause inconsistent phase within "*
-              "consecutive 250ns pulses")
+              "consecutive pulses")
     end
     ret = QubitNoZ(IFreq, lineXYI, lineXYQ, fill("-1", (7,2)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
@@ -146,9 +148,9 @@ function Qubit(IFreq::Float64, lineXYI::Tuple{Instrument,Int},
     lineXYQ::Tuple{Instrument,Int}, lineZ::Tuple{Instrument,Int})
 
     if (isa(lineXYI[1], InsAWG5014C) || isa(lineXYQ[1], InsAWG5014C) ||
-        isa(lineZ[1], InsAWG5014C)) && (IFreq % (1e9/AWGLENGTH) != 0)
+        isa(lineZ[1], InsAWG5014C)) && (IFreq *AWGLENGTH % 1e9) != 0
       println("WARNING: given IFreq will cause inconsistent phase within "*
-              "consecutive 250ns pulses")
+              "consecutive pulses")
     end
     ret = QubitWithZ(IFreq, lineXYI, lineXYQ, lineZ, fill("-1", (10,3)), Dict())
     println("To initialize pulse shapes for this Qubit, please run one of the "*
