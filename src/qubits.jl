@@ -1,3 +1,4 @@
+# Comment for testing, 6/26/2017
 module Qubits
 
 using ..Clifford
