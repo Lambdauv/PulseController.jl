@@ -39,11 +39,10 @@ export gateNames
 
 import Base: convert
 import Base: getindex, size
-import Base: show, showarray, summary
+import Base: show, summary
 import Base: normalize, *, inv, kron
 
 using StaticArrays
-using Core.Intrinsics: box, unbox
 
 immutable CMatrix{S,L} <: StaticMatrix{UInt8}
     data::NTuple{L,UInt8}
@@ -84,10 +83,9 @@ end
 
 # Here's how we are going to display these matrices in a meaningful way.
 # Unnormalized matrices result in a delicious slice of pizza.
-bitstype 8 CEntry  # has to be a multiple of 8 at the moment
+primitive type CEntry 8 end  # has to be a multiple of 8 at the moment
 convert(::Type{CEntry}, x::CEntry) = x
-convert(::Type{CEntry}, x::Number) = box(CEntry, unbox(UInt8, UInt8(x)))
-convert{T<:Number}(::Type{T}, x::CEntry) = T(box(UInt8, unbox(CEntry, x)))
+convert(::Type{CEntry}, x::Number) = UInt8(x)
 function show(io::IO, c::CEntry)
     v = UInt8(c)
     if v == 0x00
@@ -438,6 +436,12 @@ function benchmark2Qubit(nClifs, pulseIndex::Int = 1)
   recovery = inv(*([TQClif[reverse(selection)]
                           fill(TQClif[pulseIndex], nClifs-1)]'[:]...))
   [vcat(TQPulse[[selection fill(pulseIndex, nClifs-1)]'[:]]...); TQLookup[recovery]]
+end
+
+# We also want to be able to produce a QASM file from a gate sequence.
+# Do we want QASM, or just the image output?  What do we the users want to type for multiqubit control?
+function write_Qasm(pulseSeq::Pulse)
+
 end
 
 end # End module Clifford
