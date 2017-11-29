@@ -39,23 +39,34 @@ export gateNames
 
 import Base: convert
 import Base: getindex, size
-import Base: show, summary
-import Base: normalize, *, inv, kron
+import Base: show, showarray, summary
+import Base: normalize, *, inv, kron, eye
 
 using StaticArrays
 
-immutable CMatrix{S,L} <: StaticMatrix{UInt8}
-    data::NTuple{L,UInt8}
+immutable CMatrix{S,L}
+    data::SArray{Tuple{S,S},UInt8,2,L}
 
-    function CMatrix(d::NTuple{L,UInt8})
-        StaticArrays.check_smatrix_params(Val{S}, Val{S}, UInt8, Val{L})
-        new(d)
+    function CMatrix{S,L}(d::NTuple{L,UInt8}) where S where L
+        CMatrix(new(d))
     end
 
-    function CMatrix(d::NTuple{L})
-        StaticArrays.check_smatrix_params(Val{S}, Val{S}, UInt8, Val{L})
-        new(StaticArrays.convert_ntuple(UInt8, d))
+    function CMatrix{S,L}(d::NTuple{L}) where S where L
+        CMatrix{S,L}(new(StaticArrays.convert_ntuple(UInt8, d)))
     end
+
+    function CMatrix{S,L}(d::SArray{Tuple{S,S},UInt8,2,L}) where S where L
+        CMatrix{S,L}(new(d))
+    end
+end
+
+function CMatrix(x::SArray)
+    L = length(x)
+    S = sqrt(L)
+    if !isinteger(S)
+        error("Must provide a square number of elements.")
+    end
+    CMatrix{Int(S),L}(x)
 end
 
 function CMatrix(x::Tuple)
@@ -67,63 +78,25 @@ function CMatrix(x::Tuple)
     CMatrix{Int(S),L}(x)
 end
 
-@generated function (::Type{CMatrix{S1}}){S1,L}(x::NTuple{L})
-    if S1*S1 != L
-        error("Incorrect matrix size: $S1 * $S1 != $L.")
-    end
-    return quote
-        $(Expr(:meta, :inline))
-        CMatrix{S1, L}(x)
-    end
-end
-
-# StaticArrays interfacing
-@inline size{S,L}(::Union{CMatrix{S,L}, Type{CMatrix{S,L}}}) = (S,S)
-@inline getindex(A::CMatrix, i::Integer) = A.data[i]
-
-# Here's how we are going to display these matrices in a meaningful way.
-# Unnormalized matrices result in a delicious slice of pizza.
-primitive type CEntry 8 end  # has to be a multiple of 8 at the moment
-convert(::Type{CEntry}, x::CEntry) = x
-convert(::Type{CEntry}, x::Number) = UInt8(x)
-function show(io::IO, c::CEntry)
-    v = UInt8(c)
-    if v == 0x00
-        print(io, " 0")
-    elseif v == 0x01
-        print(io, " 1")
-    elseif v == 0x02
-        print(io, " 𝒊")
-    elseif v == 0x03
-        print(io, "-𝒊")
-    elseif v == 0x04
-        print(io, "-1")
-    else
-        print(io, " 🍕")
-    end
-end
-
-show{S}(io::IO, ::MIME"text/plain", x::CMatrix{S}) =
-    showarray(io, SMatrix{S,S,CEntry}(x.data), false)
-summary{S}(m::SMatrix{S,S,CEntry}) = "Clifford matrix"
-
 # Our normalization convention is that the first nonzero entry be a 1.  This
 # normalization reconciles the 5-element field and the +1, -1, +i, -i
 # representations, showing both are isomorphic to the Clifford group.
 # NOTE: normalize only produces correct results on matrices already modded by 5.
 function normalize(A::CMatrix)
-  normConst = A[findfirst(A)]
-  inverse = normConst $ ((normConst >>> 0x01) & 0x01) # Inverse mod 5
-  mod.(A*inverse, 0x05)
+  normConst = A.data[findfirst(A.data)]
+  inverse = xor(normConst, ((normConst >>> 0x01) & 0x01)) # Inverse mod 5
+  CMatrix(mod.(A.data*inverse, 0x05))
+end
+
+function eye(A::CMatrix)
+    CMatrix(eye(A.data))
 end
 
 # Implement multiplication such that the matrix product is properly normalized.
 # Note that this function throws an error if called with no arguments, because
 # it cannot infer what dimensions to use.
 function *(A::CMatrix, B::CMatrix...)
-    mult(X::CMatrix, Y::CMatrix) =
-        invoke(*, (StaticMatrix{UInt8}, StaticMatrix{UInt8}), X, Y)
-    normalize(reduce((D,C) -> mod.(mult(D,C), 0x05), eye(A), (A,B...)))
+    normalize(CMatrix(reduce((D,C) -> mod.(D*C.data, 0x05), eye(A).data, (A,B...))))
 end
 
 # We also have to modify matrix inversion.  My present choice is to compute the
@@ -132,28 +105,27 @@ end
 # minors of each element but I feel it would amount to rewriting too much for
 # something not performance-critical.
 function inv{S}(A::CMatrix{S})
-    B = SMatrix{S,S,Float64}(A) # avoid problem in StaticArrays.jl
+    B = SMatrix{S,S,Float64,S*S}(A.data) # avoid problem in StaticArrays.jl
     normalize(CMatrix{S,S*S}(map(x -> UInt8(round(mod.(x, 0x05))), inv(B) * det(B))))
 end
 
 # Output a clifford matrix corresponding to A on qubit 1 and B on qubit 2.
 function kron{S,T}(A::CMatrix{S}, B::CMatrix{T})
-    #TODO: implement kron for StaticArrays in a pull request
-    r = invoke(kron, (StaticMatrix{UInt8}, StaticMatrix{UInt8}), A, B)
+    r = SArray{Tuple{S*T,S*T},UInt8,2,S*T*S*T}(kron(A.data, B.data))
     A = S*T
     B = A*A
-    CMatrix{A,B}(mod(r, 0x05))
+    CMatrix{A,B}(mod.(r, 0x05))
 end
 
 # I'll explicitly write out the x pi/2 and y pi/2 single-qubit matrices, using
 # these to generate the rest.  I will refer to them as f and g, respectively.
-const f = CMatrix{2,4}([1 2; 2 1])
-const g = CMatrix{2,4}([1 4; 1 1])
+const f = CMatrix{2,4}((1, 2, 2, 1))
+const g = CMatrix{2,4}((1, 4, 1, 1))
 const h = *(g, f, g, g, g) # Gives the z/2 rotation
 
 # For later use, the 2-qubit matrices cz and swap
-const cz = CMatrix{4,16}([1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 4])
-const swap = CMatrix{4,16}([1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1])
+const cz = CMatrix{4,16}((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4))
+const swap = CMatrix{4,16}((1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1))
 
 # Single qubit clifford group is 24 gates, I'll just do this the long way.
 # In the Mathematica notebook these are shown to correspond 1:1 with the pulses
@@ -244,7 +216,7 @@ end
 # This is essentially an enum, but the numbers are chosen to have some later
 # significance.  Note the null gate is empty rather than idle.
 const nul = Pulse(Array(Int8,(0,1)))
-const Idle =  Pulse(fill(Int8(7),(1,1)))
+const Idle =  Pulse(fill(Int8(0),(1,1)))
 const Xpi2 =  Pulse(fill(Int8(1),(1,1)))
 const Xpi =   Pulse(fill(Int8(5),(1,1)))
 const X3pi2 = Pulse(fill(Int8(3),(1,1)))
@@ -400,7 +372,7 @@ TQLookup = Dict{CMatrix, Pulse}(map(=>, [TQClif map(A->*(swap, A), TQClif)]
 # has the same matrix but a different pulse and different index.  It would be
 # left out of the lookup dictionary.  TODO: add support for benchmarking "idle."
 
-function benchmark1Qubit(nClifs, pulseIndex::Int = 1, ZControl::Bool = true)
+function benchmark1Qubit(nClifs, pulseIndex::Int = 1, ZControl::Bool = false)
   selection = rand(1:24, nClifs-1)
   recovery = inv(*([fill(SQClif[pulseIndex], (1,nClifs-1));
                      SQClif[reverse(selection)']][:]...))
@@ -409,6 +381,14 @@ function benchmark1Qubit(nClifs, pulseIndex::Int = 1, ZControl::Bool = true)
   else
     [vcat(SQPulseNoZ[[selection fill(pulseIndex, nClifs-1)]'[:]]...); SQLookupNoZ[recovery]]
   end
+end
+
+function HVIbenchmark1Qubit(nclifs, pulseIndex::Int = 1, ZControl::Bool = false)
+  seq = vcat(benchmark1Qubit(nclifs, pulseIndex, ZControl),Int8(7))[1:end]
+  append!(seq, zeros(Int8, 9-mod(length(seq)-1,10)))
+  regs=1:Int(length(seq)/10)
+  compress(A::Array{Int8})=mapreduce(x->Int32(A[x])<<(3*x-3),|, 0, 1:10)
+  return (x->compress(seq[10*x-9:10*x])).(regs)
 end
 
 # A deterministic selection is specified for debugging
@@ -436,12 +416,6 @@ function benchmark2Qubit(nClifs, pulseIndex::Int = 1)
   recovery = inv(*([TQClif[reverse(selection)]
                           fill(TQClif[pulseIndex], nClifs-1)]'[:]...))
   [vcat(TQPulse[[selection fill(pulseIndex, nClifs-1)]'[:]]...); TQLookup[recovery]]
-end
-
-# We also want to be able to produce a QASM file from a gate sequence.
-# Do we want QASM, or just the image output?  What do we the users want to type for multiqubit control?
-function write_Qasm(pulseSeq::Pulse)
-
 end
 
 end # End module Clifford
